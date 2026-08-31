@@ -1,0 +1,26 @@
+/** 全局样式重置 **/
+page {
+  background-color: #f6f7f9;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 全局统一容器：强制满宽、标准内边距、消除默认居中 */
+.container {
+  display: block !important;
+  width: 100% !important;
+  padding: 24rpx !important;
+  box-sizing: border-box !important;
+}
+
+/* 全局卡片基类：统一圆角、阴影、内边距与满宽 */
+.card {
+  width: 100% !important;
+  box-sizing: border-box !important;
+  background: #ffffff;
+  border-radius: 18rpx;
+  padding: 28rpx;
+  margin-bottom: 24rpx;
+  box-shadow: 0 2rpx 10rpx rgba(0,0,0,0.04);
+}

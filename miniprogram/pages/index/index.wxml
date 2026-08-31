@@ -1,0 +1,169 @@
+<view class="container">
+  <!-- 1. 顶部个人身份卡片与操作按钮 -->
+  <view class="user-header-card" bindtap="handleUserHeaderTap">
+    <view class="user-info">
+      <text class="user-avatar">👤</text>
+      <view class="user-detail">
+        <view class="name-row">
+          <text class="user-name">{{ currentUser.name || '未认证员工' }}</text>
+          <text class="role-badge role-{{ currentUser.role || 'unbound' }}">
+            {{ currentUser.role === 'admin' ? '管理员' : (currentUser.role === 'service' ? '客服' : (currentUser.role === 'worker' ? '师傅' : '待核验')) }}
+          </text>
+        </view>
+        <text class="user-phone">{{ currentUser.phone ? '📱 ' + currentUser.phone : '点此绑定手机号' }}</text>
+      </view>
+    </view>
+
+    <!-- 头部操作区 -->
+    <view class="header-actions" catchtap="stopBubble">
+      <!-- 管理员专属：营收统计入口 -->
+      <button 
+        class="btn-action btn-stats" 
+        wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
+        bindtap="goToStats"
+      >
+        📊 营收
+      </button>
+      <button 
+        class="btn-action btn-add-user" 
+        wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
+        bindtap="openAddUserModal"
+      >
+        + 员工
+      </button>
+      <button 
+        class="btn-action btn-create" 
+        wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === 'service') }}" 
+        bindtap="goToCreate"
+      >
+        + 录单
+      </button>
+    </view>
+  </view>
+
+  <!-- 2. 工单状态分类 Tab 与数量统计 -->
+  <view class="status-tab-bar">
+    <view 
+      class="tab-item {{ currentTab === item.key ? 'tab-item-active' : '' }}" 
+      wx:for="{{ tabList }}" 
+      wx:key="key" 
+      bindtap="onTabChange" 
+      data-key="{{ item.key }}"
+    >
+      <text class="tab-label">{{ item.label }}</text>
+      <text class="tab-count {{ currentTab === item.key ? 'count-active' : '' }}">{{ statusCounts[item.key] || 0 }}</text>
+      <view class="tab-line" wx:if="{{ currentTab === item.key }}"></view>
+    </view>
+  </view>
+
+  <!-- 3. 检索区域 -->
+  <view class="search-bar">
+    <input 
+      class="search-input" 
+      placeholder="🔍 搜索电话 / 地址 / 师傅姓名 / 时间" 
+      value="{{ searchKey }}" 
+      bindinput="onSearchInput" 
+    />
+  </view>
+
+  <!-- 4. 订单列表 -->
+  <view class="order-list">
+    <view 
+      class="order-card" 
+      wx:for="{{ filteredOrders }}" 
+      wx:key="_id" 
+      bindtap="goToDetail" 
+      data-id="{{ item._id }}"
+    >
+      <view class="card-top">
+        <text class="time">📅 {{ item.appointmentTime || item.time || '待定' }}</text>
+        <text class="status-tag {{ item.status === '待派单' ? 'status-pending' : (item.status === '已派单' ? 'status-assigned' : 'status-done') }}">{{ item.status }}</text>
+      </view>
+
+      <view class="card-body">
+        <view class="row">
+          <text class="item-label">客户电话：</text>
+          <text class="item-val phone">{{ item.customerPhone || item.phone || '-' }}</text>
+        </view>
+        <view class="row">
+          <text class="item-label">服务地址：</text>
+          <text class="item-val">{{ item.address || '-' }}</text>
+        </view>
+        <view class="row">
+          <text class="item-label">指派师傅：</text>
+          <text class="item-val highlight">{{ item.workerName || '未指派' }}</text>
+        </view>
+        <view class="row" wx:if="{{ item.source }}">
+          <text class="item-label">订单来源：</text>
+          <text class="item-val">{{ item.source }}</text>
+        </view>
+      </view>
+
+      <view class="card-footer">
+        <text class="feedback-count">💬 处理反馈 ({{ item.feedbacks ? item.feedbacks.length : 0 }})</text>
+        <text class="arrow">详情 ➔</text>
+      </view>
+    </view>
+
+    <!-- 空数据提示 -->
+    <view class="empty-state" wx:if="{{ filteredOrders.length === 0 }}">
+      <text>{{ !currentUser ? '请先绑定手机号以查看工单' : '当前分类下暂无工单' }}</text>
+    </view>
+  </view>
+
+  <!-- 首次使用：手机号核验绑定弹窗 -->
+  <view class="modal-mask" wx:if="{{ showPhoneModal }}">
+    <view class="modal-box">
+      <view class="modal-title">🔐 员工身份核验</view>
+      <view class="modal-desc">请输入管理员在系统中预留的手机号，系统将自动关联您的账号并解锁管理权限：</view>
+      
+      <input 
+        class="modal-input" 
+        type="number" 
+        maxlength="11" 
+        placeholder="请输入您的11位手机号" 
+        value="{{ inputPhone }}" 
+        bindinput="onPhoneInput" 
+      />
+
+      <button class="btn-primary mt-30" bindtap="verifyAndBindPhone">核验并绑定登录</button>
+    </view>
+  </view>
+
+  <!-- 管理员添加新员工弹窗 -->
+  <view class="modal-mask" wx:if="{{ showAddUserModal }}">
+    <view class="modal-box">
+      <view class="modal-title">添加新员工</view>
+      
+      <input 
+        class="modal-input mt-20" 
+        placeholder="员工姓名（如：赵师傅）" 
+        value="{{ newUserName }}" 
+        bindinput="onNewUserNameInput" 
+      />
+
+      <input 
+        class="modal-input mt-20" 
+        type="number" 
+        maxlength="11" 
+        placeholder="员工手机号（用于登录核验）" 
+        value="{{ newUserPhone }}" 
+        bindinput="onNewUserPhoneInput" 
+      />
+
+      <view class="role-select-box mt-20">
+        <text class="role-label">分配角色：</text>
+        <radio-group class="role-radio-group" bindchange="onNewUserRoleChange">
+          <label class="radio-item"><radio value="worker" checked="{{ newUserRole === 'worker' }}" />师傅</label>
+          <label class="radio-item"><radio value="service" checked="{{ newUserRole === 'service' }}" />客服</label>
+          <label class="radio-item"><radio value="admin" checked="{{ newUserRole === 'admin' }}" />管理员</label>
+        </radio-group>
+      </view>
+
+      <view class="modal-btns mt-30">
+        <button class="modal-btn cancel" bindtap="closeAddUserModal">取消</button>
+        <button class="modal-btn confirm" bindtap="submitAddUser">确认录入</button>
+      </view>
+    </view>
+  </view>
+</view>

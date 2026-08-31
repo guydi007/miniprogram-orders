@@ -1,0 +1,381 @@
+page {
+  background-color: #f6f7f9;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  box-sizing: border-box;
+}
+
+/* 1. 强制覆盖全局容器，撑满全屏宽度并消除居中收缩 */
+.container {
+  display: block !important;
+  width: 100% !important;
+  padding: 24rpx !important;
+  box-sizing: border-box !important;
+}
+
+/* 2. 顶部用户信息卡片 */
+.user-header-card {
+  width: 100%;
+  box-sizing: border-box;
+  background: #ffffff;
+  border-radius: 16rpx;
+  padding: 24rpx 28rpx;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2rpx 10rpx rgba(0,0,0,0.04);
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0; /* 关键：防止 Flex 子项溢出挤压 */
+}
+
+.user-avatar {
+  font-size: 52rpx;
+  margin-right: 16rpx;
+  flex-shrink: 0;
+}
+
+.user-detail {
+  flex: 1;
+  min-width: 0;
+}
+
+.name-row {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.user-name {
+  font-size: 30rpx;
+  font-weight: bold;
+  color: #333333;
+  margin-right: 12rpx;
+  max-width: 200rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.role-badge {
+  font-size: 20rpx;
+  padding: 4rpx 10rpx;
+  border-radius: 6rpx;
+  flex-shrink: 0;
+}
+
+.role-admin { background: #ffebee; color: #e53935; }
+.role-service { background: #e3f2fd; color: #1e88e5; }
+.role-worker { background: #e8f8f0; color: #07c160; }
+.role-unbound { background: #f5f5f5; color: #999999; }
+
+.user-phone {
+  font-size: 22rpx;
+  color: #888888;
+  margin-top: 6rpx;
+  display: block;
+}
+
+/* 头部操作按钮区（彻底重置微信原生按钮的挤压尺寸） */
+.header-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.btn-action {
+  font-size: 24rpx !important;
+  font-weight: normal !important;
+  padding: 0 20rpx !important;
+  height: 58rpx !important;
+  line-height: 58rpx !important;
+  border-radius: 29rpx !important;
+  margin: 0 0 0 12rpx !important;
+  width: auto !important;
+  min-height: 0 !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-add-user {
+  background-color: #f2f3f5 !important;
+  color: #333333 !important;
+}
+
+.btn-create {
+  background-color: #07c160 !important;
+  color: #ffffff !important;
+}
+
+/* 3. 状态 Tab 栏（100% 满宽铺满） */
+.status-tab-bar {
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  background: #ffffff;
+  border-radius: 16rpx;
+  margin-top: 20rpx;
+  padding: 10rpx 0;
+  box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.03);
+}
+
+.tab-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12rpx 0;
+  position: relative;
+}
+
+.tab-label {
+  font-size: 26rpx;
+  color: #666666;
+}
+
+.tab-count {
+  font-size: 22rpx;
+  font-weight: bold;
+  color: #999999;
+  margin-top: 6rpx;
+  background: #f0f2f5;
+  padding: 2rpx 14rpx;
+  border-radius: 16rpx;
+}
+
+.tab-item-active .tab-label {
+  color: #07c160;
+  font-weight: bold;
+}
+
+.tab-item-active .count-active {
+  background: #e8f8f0;
+  color: #07c160;
+}
+
+.tab-line {
+  position: absolute;
+  bottom: 0;
+  width: 44rpx;
+  height: 6rpx;
+  background-color: #07c160;
+  border-radius: 4rpx;
+}
+
+/* 4. 检索区域（100% 满宽） */
+.search-bar {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 20rpx 0;
+}
+
+.search-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #ffffff;
+  height: 76rpx;
+  border-radius: 16rpx;
+  padding: 0 24rpx;
+  font-size: 26rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.02);
+}
+
+/* 5. 订单列表与卡片 */
+.order-list {
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+.order-card {
+  width: 100%;
+  box-sizing: border-box;
+  background: #ffffff;
+  border-radius: 16rpx;
+  padding: 26rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.04);
+}
+
+.card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1rpx solid #f0f0f0;
+  padding-bottom: 16rpx;
+  margin-bottom: 16rpx;
+}
+
+.time {
+  font-size: 28rpx;
+  font-weight: bold;
+  color: #ff9800;
+}
+
+.status-tag {
+  font-size: 22rpx;
+  padding: 4rpx 14rpx;
+  border-radius: 6rpx;
+}
+
+.status-pending { background: #fff3e0; color: #ff9800; }
+.status-assigned { background: #e3f2fd; color: #2196f3; }
+.status-done { background: #e8f8f0; color: #07c160; }
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  font-size: 26rpx;
+}
+
+.row {
+  display: flex;
+  margin-bottom: 10rpx;
+}
+
+.item-label {
+  color: #888888;
+  width: 150rpx;
+  flex-shrink: 0;
+}
+
+.item-val {
+  color: #333333;
+  flex: 1;
+}
+
+.phone {
+  color: #10aeff;
+  font-weight: 500;
+}
+
+.highlight {
+  color: #07c160;
+  font-weight: 500;
+}
+
+.card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1rpx solid #f8f8f8;
+  padding-top: 16rpx;
+  margin-top: 16rpx;
+  font-size: 24rpx;
+  color: #888888;
+}
+
+.arrow {
+  color: #10aeff;
+}
+
+.empty-state {
+  text-align: center;
+  color: #999999;
+  font-size: 26rpx;
+  padding: 80rpx 0;
+}
+
+/* 6. 弹窗样式（手机号核验 & 录入新员工） */
+.modal-mask {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal-box {
+  background: #ffffff;
+  width: 84%;
+  border-radius: 20rpx;
+  padding: 36rpx;
+  box-sizing: border-box;
+}
+
+.modal-title {
+  font-size: 32rpx;
+  font-weight: bold;
+  text-align: center;
+  color: #333333;
+}
+
+.modal-desc {
+  font-size: 24rpx;
+  color: #666666;
+  line-height: 1.5;
+  margin: 16rpx 0 24rpx 0;
+}
+
+.modal-input {
+  background: #f7f8fa;
+  border: 1rpx solid #e5e5e5;
+  height: 80rpx;
+  border-radius: 12rpx;
+  padding: 0 20rpx;
+  font-size: 28rpx;
+}
+
+.role-select-box {
+  display: flex;
+  align-items: center;
+  font-size: 26rpx;
+}
+
+.role-label {
+  color: #666666;
+  margin-right: 12rpx;
+}
+
+.role-radio-group {
+  display: flex;
+}
+
+.radio-item {
+  margin-right: 20rpx;
+  font-size: 26rpx;
+}
+
+.mt-20 { margin-top: 20rpx; }
+.mt-30 { margin-top: 30rpx; }
+
+.btn-primary {
+  background: #07c160;
+  color: #ffffff;
+  font-size: 28rpx;
+  border-radius: 12rpx;
+}
+
+.modal-btns {
+  display: flex;
+}
+
+.modal-btn {
+  flex: 1;
+  font-size: 28rpx;
+  border-radius: 10rpx;
+}
+
+.modal-btn.cancel {
+  background: #f2f3f5;
+  color: #666666;
+  margin-right: 16rpx;
+}
+
+.modal-btn.confirm {
+  background: #07c160;
+  color: #ffffff;
+}
+
+.btn-stats {
+  background-color: #e8f8f0 !important;
+  color: #07c160 !important;
+  font-weight: bold !important;
+}

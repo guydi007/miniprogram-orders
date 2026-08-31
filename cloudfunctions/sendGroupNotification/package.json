@@ -1,0 +1,9 @@
+{
+  "name": "sendGroupNotification",
+  "version": "1.0.0",
+  "description": "师傅专属群机器人消息推送",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}
