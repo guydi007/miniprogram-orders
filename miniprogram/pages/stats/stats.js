@@ -7,7 +7,7 @@ function formatDate(date) {
 
 // 提取工单中的规范日期 YYYY-MM-DD
 function extractOrderDate(order) {
-  const str = order.appointmentTime || order.createTime || '';
+  const str = order.appointmentTime || order.time || order.createTime || '';
   const match = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
   if (match) {
     const pad = (n) => (n < 10 ? '0' + n : '' + n);
@@ -23,7 +23,7 @@ Page({
     startDate: '',
     endDate: '',
     periodText: '今日',
-    
+
     // 师傅筛选
     workerOptions: ['全部师傅'],
     selectedWorkerName: '全部师傅',
@@ -45,8 +45,8 @@ Page({
   },
 
   onLoad() {
-    // 权限校验：仅管理员可访问
-    const user = app.globalData.currentUser;
+    // 1. 权限校验：优先读取本地持久化缓存，防止内存丢失误判
+    const user = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
     if (!user || user.role !== 'admin') {
       return wx.showModal({
         title: '无权访问',
@@ -75,20 +75,40 @@ Page({
       this.setData({
         workerOptions: ['全部师傅', ...names]
       });
-    });
+    }).catch(e => console.error('获取师傅列表失败：', e));
   },
 
-  loadAllOrders() {
-    wx.showLoading({ title: '正在统计营收...' });
+  // 突破小程序前端 20 条查询上限，批量拉取完整工单
+  async loadAllOrders() {
+    wx.showLoading({ title: '正在核算营收...' });
     const db = wx.cloud.database();
-    db.collection('orders').limit(1000).get().then(res => {
-      this.setData({ allOrders: res.data || [] });
+    const MAX_LIMIT = 20;
+
+    try {
+      const countResult = await db.collection('orders').count();
+      const total = countResult.total;
+      const batchTimes = Math.ceil(total / MAX_LIMIT);
+      const tasks = [];
+
+      for (let i = 0; i < batchTimes; i++) {
+        const promise = db.collection('orders').skip(i * MAX_LIMIT).limit(MAX_LIMIT).get();
+        tasks.push(promise);
+      }
+
+      let allOrders = [];
+      if (tasks.length > 0) {
+        const results = await Promise.all(tasks);
+        allOrders = results.reduce((acc, cur) => acc.concat(cur.data || []), []);
+      }
+
+      this.setData({ allOrders });
       this.calculateStats();
       wx.hideLoading();
-    }).catch(err => {
-      console.error(err);
+    } catch (err) {
+      console.error('拉取全部工单失败：', err);
       wx.hideLoading();
-    });
+      wx.showToast({ title: '数据拉取失败', icon: 'none' });
+    }
   },
 
   switchPeriod(e) {
@@ -135,7 +155,7 @@ Page({
     });
   },
 
-  // 核心统计计算引擎
+  // 核心统计计算引擎（已兼容定金单与全款单核算）
   calculateStats() {
     const { allOrders, currentPeriod, startDate, endDate, selectedWorkerName, workerOptions } = this.data;
     const now = new Date();
@@ -189,7 +209,8 @@ Page({
         };
       }
 
-      if (o.status === '已完工' && o.settlement) {
+      // 只要有结单收款数据（全款单或已收定金单），均纳入财务核算
+      if (o.settlement && o.dealType !== 'failed') {
         const s = o.settlement;
         const w = parseFloat(s.wechat) || 0;
         const a = parseFloat(s.alipay) || 0;
@@ -202,6 +223,8 @@ Page({
         cash += c;
         paidTotal += p;
         balanceTotal += b;
+
+        // 已完工或已收取定金均计为成单
         dealCount += 1;
 
         workerMap[wName].wechat += w;
@@ -210,7 +233,7 @@ Page({
         workerMap[wName].paidTotal += p;
         workerMap[wName].balanceTotal += b;
         workerMap[wName].dealCount += 1;
-      } else if (o.status === '未成单') {
+      } else if (o.status === '未成单' || o.dealType === 'failed') {
         failCount += 1;
         workerMap[wName].failCount += 1;
       }
@@ -218,12 +241,10 @@ Page({
 
     const avgTicket = dealCount > 0 ? (paidTotal / dealCount).toFixed(2) : '0.00';
 
-    // 4. 师傅排行榜过滤逻辑（方法 2：自动过滤未分配与已删除且0业绩的历史师傅）
+    // 4. 师傅排行榜过滤
     const workerStatsList = Object.values(workerMap)
       .filter(w => {
-        // 过滤掉未分配
         if (w.name === '未分配') return false;
-        // 如果师傅已经不在当前 users 表里，且在该周期内没有任何成单业绩，则直接隐藏
         if (!workerOptions.includes(w.name) && w.paidTotal <= 0 && w.dealCount <= 0) {
           return false;
         }
@@ -269,7 +290,7 @@ Page({
     text += `  • 现金收款：¥ ${stats.cashTotal}\n`;
     text += `--------------------------\n`;
     text += `⚠️ 待收尾款：¥ ${stats.balanceTotal}\n`;
-    text += `📈 完工单数：${stats.dealCount} 单 (客单价: ¥${stats.avgTicket})\n`;
+    text += `📈 成单总数：${stats.dealCount} 单 (客单价: ¥${stats.avgTicket})\n`;
     text += `❌ 未成单数：${stats.failCount} 单\n`;
     text += `==========================\n`;
     text += `🏆 师傅业绩明细：\n`;
@@ -277,7 +298,7 @@ Page({
     if (workerStatsList.length > 0) {
       workerStatsList.forEach((w, idx) => {
         text += `${idx + 1}. ${w.name}：¥${w.paidTotal} (${w.dealCount}单)`;
-        if (parseFloat(w.balanceTotal) > 0) text += ` [尾款:¥${w.balanceTotal}]`;
+        if (parseFloat(w.balanceTotal) > 0) text += ` [待收尾款:¥${w.balanceTotal}]`;
         text += `\n`;
       });
     } else {

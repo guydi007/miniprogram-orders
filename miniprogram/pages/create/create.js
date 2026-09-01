@@ -50,24 +50,13 @@ Page({
     customerPhone: '',
     address: '',
     appointmentTime: '',
-    sourceOptions: ['美团', '大众点评', '58同城', '电话咨询', '老客推荐', '其他渠道'],
-    sourceIndex: 0,
-    remark: '',
-    workerList: [],
-    selectedWorkerIndex: -1
+    source: '悦乐居',
+    remark: ''
   },
 
   onLoad() {
-    this.setData({
-      currentUser: app.globalData.currentUser,
-      workerList: app.globalData.workerList || []
-    });
-
-    // 重新拉取最新的师傅列表
-    const db = wx.cloud.database();
-    db.collection('users').where({ role: 'worker' }).get().then(res => {
-      this.setData({ workerList: res.data || [] });
-    }).catch(e => console.error(e));
+    const cachedUser = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
+    this.setData({ currentUser: cachedUser });
   },
 
   // 预约时间快捷点选
@@ -88,31 +77,39 @@ Page({
     }
   },
 
+  // 表单字段输入
   onPhoneInput(e) {
-    this.setData({ customerPhone: e.detail.value.trim() });
+    this.setData({ customerPhone: (e.detail.value || '').trim() });
   },
 
   onAddressInput(e) {
     this.setData({ address: e.detail.value.trim() });
   },
 
+  onSourceInput(e) {
+    this.setData({ source: e.detail.value.trim() });
+  },
+
   onRemarkInput(e) {
     this.setData({ remark: e.detail.value.trim() });
   },
 
-  onSourceChange(e) {
-    this.setData({ sourceIndex: e.detail.value });
-  },
-
-  onWorkerChange(e) {
-    this.setData({ selectedWorkerIndex: e.detail.value });
+  // 兼容性通用 input 处理器
+  onInput(e) {
+    const field = e.currentTarget.dataset.field;
+    if (field) {
+      this.setData({ [field]: e.detail.value.trim() });
+    }
   },
 
   // 提交工单
-  submitOrder() {
-    const { customerPhone, address, appointmentTime, sourceOptions, sourceIndex, remark, workerList, selectedWorkerIndex, currentUser } = this.data;
+  async submitOrder() {
+    const { customerPhone, address, appointmentTime, source, remark, currentUser } = this.data;
 
-    if (!customerPhone || customerPhone.length < 7) {
+    const cleanPhone = (customerPhone || '').trim();
+    const isPhoneValid = /^1[3-9]\d{9}$/.test(cleanPhone) || /^(\d{3,4}-?)?\d{7,8}$/.test(cleanPhone);
+
+    if (!cleanPhone || !isPhoneValid) {
       return wx.showToast({ title: '请填写正确的客户电话', icon: 'none' });
     }
     if (!address) {
@@ -122,27 +119,28 @@ Page({
       return wx.showToast({ title: '请填写预约时间', icon: 'none' });
     }
 
-    const assignedWorker = selectedWorkerIndex >= 0 ? workerList[selectedWorkerIndex] : null;
     const timeStr = getTimeString();
     const serviceName = (currentUser && currentUser.name) || '客服';
 
     const newOrder = {
-      customerPhone,
-      address,
-      appointmentTime,
-      source: sourceOptions[sourceIndex],
+      customerPhone: cleanPhone,
+      phone: cleanPhone, // 兼容字段
+      address: address,
+      appointmentTime: appointmentTime,
+      time: appointmentTime, // 兼容字段
+      source: source || '其他渠道',
       remark: remark || '',
       serviceName: serviceName,
-      workerName: assignedWorker ? assignedWorker.name : '',
-      workerPhone: assignedWorker ? assignedWorker.phone : '',
-      status: assignedWorker ? '已派单' : '待派单',
+      workerName: '', // 初始为待派单
+      workerPhone: '',
+      status: '待派单',
       createTime: timeStr,
       feedbacks: [
         {
           id: 'fb_' + Date.now(),
           authorName: serviceName,
           authorRole: (currentUser && currentUser.role) || 'service',
-          content: assignedWorker ? `创建工单并指派给【${assignedWorker.name}】` : '创建工单（待派单）',
+          content: '创建工单（待派单）',
           createTime: timeStr,
           isSystem: true
         }
@@ -152,9 +150,11 @@ Page({
     wx.showLoading({ title: '正在创建工单...' });
     const db = wx.cloud.database();
 
-    db.collection('orders').add({
-      data: newOrder
-    }).then(() => {
+    try {
+      await db.collection('orders').add({
+        data: newOrder
+      });
+
       wx.hideLoading();
       wx.showToast({
         title: '录单成功！',
@@ -166,10 +166,10 @@ Page({
           }, 1500);
         }
       });
-    }).catch(err => {
-      console.error(err);
+    } catch (err) {
+      console.error('录单失败：', err);
       wx.hideLoading();
       wx.showToast({ title: '录单失败，请重试', icon: 'none' });
-    });
+    }
   }
 });

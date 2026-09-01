@@ -1,5 +1,4 @@
 const app = getApp();
-const URGENT_TEMPLATE_ID = 'h2xwE4YRkuI4r-DmVqJHVpN_l_YSTdKMutIg0Lmwrug';
 
 Page({
   data: {
@@ -8,7 +7,6 @@ Page({
     filteredOrders: [],
     searchKey: '',
 
-    // Tab 栏配置
     currentTab: 'all',
     tabList: [
       { key: 'all', label: '全部' },
@@ -25,29 +23,27 @@ Page({
       '未成单': 0
     },
 
-    // 手机号核验弹窗
     showPhoneModal: false,
     inputPhone: '',
 
-    // 添加新员工弹窗
-    showAddUserModal: false,
+    showUserManageModal: false,
+    userManageTab: 'list',
+    allUserList: [],
     newUserName: '',
     newUserPhone: '',
     newUserRole: 'worker',
+    newUserIsTest: false,
 
-    // 定时器
     urgentTimer: null
   },
 
   onLoad() {
-    // 1. 优先读取持久化存储
     const cachedUser = wx.getStorageSync('currentUser');
     if (cachedUser && cachedUser.phone) {
       this.handleUserLoaded(cachedUser);
       return;
     }
 
-    // 2. 监听全局登录结果
     if (app.globalData && app.globalData.currentUser) {
       this.handleUserLoaded(app.globalData.currentUser);
     } else {
@@ -69,7 +65,14 @@ Page({
   },
 
   onShow() {
-    if (this.data.currentUser) {
+    const cachedUser = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
+    if (cachedUser && cachedUser.phone) {
+      if (!this.data.currentUser || this.data.currentUser.phone !== cachedUser.phone) {
+        this.setData({ currentUser: cachedUser });
+      }
+      this.fetchOrders();
+      this.startUrgentCheckTimer();
+    } else if (this.data.currentUser) {
       this.fetchOrders();
       this.startUrgentCheckTimer();
     }
@@ -91,7 +94,6 @@ Page({
 
   stopBubble() {},
 
-  // 用户认证成功统一入口
   handleUserLoaded(user) {
     if (app.globalData) {
       app.globalData.currentUser = user;
@@ -105,55 +107,114 @@ Page({
     });
   },
 
-  // 点击卡片手动触发登录/换绑
-  handleUserHeaderTap() {
-    this.setData({
-      showPhoneModal: true,
-      inputPhone: this.data.currentUser ? this.data.currentUser.phone : ''
-    });
+  // 点击头像卡片：测试账号与管理员自由换号，正式员工强锁定
+  async handleUserHeaderTap() {
+    const user = this.data.currentUser;
+
+    if (!user) {
+      this.setData({ showPhoneModal: true, inputPhone: '' });
+      return;
+    }
+
+    wx.showLoading({ title: '核验中...' });
+    const db = wx.cloud.database();
+
+    try {
+      const res = await db.collection('users').doc(user._id).get();
+      wx.hideLoading();
+      const dbUser = res.data || user;
+
+      // 1. 如果是测试账号 (isTest === true) 或是管理员：允许自由退出换号
+      if (dbUser.isTest === true || dbUser.role === 'admin') {
+        wx.showModal({
+          title: '退出 / 更换账号',
+          content: `当前为【${dbUser.name}】${dbUser.isTest ? '（测试免锁账号）' : ''}，确定退出并登录其他账号吗？`,
+          confirmText: '退出换号',
+          confirmColor: '#e53935',
+          success: (mRes) => {
+            if (mRes.confirm) {
+              wx.removeStorageSync('currentUser');
+              if (app.globalData) app.globalData.currentUser = null;
+              this.setData({
+                currentUser: null,
+                orders: [],
+                filteredOrders: [],
+                showPhoneModal: true,
+                inputPhone: ''
+              });
+            }
+          }
+        });
+        return;
+      }
+
+      // 2. 正式员工：已绑定微信则强锁定
+      const hasBoundOpenid = dbUser.openid && dbUser.openid.trim() !== '';
+      if (hasBoundOpenid) {
+        return wx.showModal({
+          title: '身份已绑定锁定',
+          content: `员工【${dbUser.name}】（${dbUser.phone}）已与当前微信号永久绑定，禁止切换。如需换号请联系管理员解绑。`,
+          showCancel: false,
+          confirmText: '我知道了'
+        });
+      }
+
+      // 3. 尚未绑定的正式员工：允许登录
+      this.setData({ showPhoneModal: true, inputPhone: '' });
+    } catch (e) {
+      wx.hideLoading();
+      this.setData({ showPhoneModal: true, inputPhone: '' });
+    }
   },
 
-  // 手机号输入绑定
   onPhoneInput(e) {
     this.setData({ inputPhone: (e.detail.value || '').trim() });
   },
 
-  // 验证手机号并持久化登录
+  // 手机号核验登录（通过云函数）
   async verifyAndBindPhone() {
     const phone = this.data.inputPhone;
     if (!phone || phone.length < 11) {
       return wx.showToast({ title: '请输入正确的11位手机号', icon: 'none' });
     }
 
-    wx.showLoading({ title: '核验身份中...' });
-    const db = wx.cloud.database();
+    wx.showLoading({ title: '核验登录中...' });
 
     try {
-      const res = await db.collection('users').where({ phone: phone }).get();
-      wx.hideLoading();
+      const res = await wx.cloud.callFunction({
+        name: 'login',
+        data: {
+          action: 'verifyAndBind',
+          phone: phone
+        }
+      });
 
-      if (!res.data || res.data.length === 0) {
+      wx.hideLoading();
+      const result = res.result || {};
+
+      if (!result.success) {
         return wx.showModal({
-          title: '核验失败',
-          content: '未找到该手机号对应的员工记录，请联系管理员录入。',
+          title: '核验/绑定提示',
+          content: result.msg || '核验失败，请重试',
           showCancel: false
         });
       }
 
-      const user = res.data[0];
-      // 写入持久化存储
+      const user = result.user;
       wx.setStorageSync('currentUser', user);
       this.handleUserLoaded(user);
 
-      wx.showToast({ title: `欢迎回来，${user.name}`, icon: 'success' });
+      wx.showToast({
+        title: `欢迎回来，${user.name}`,
+        icon: 'success'
+      });
     } catch (err) {
-      console.error('核验异常：', err);
+      console.error('云函数核验异常：', err);
       wx.hideLoading();
       wx.showToast({ title: '网络异常，请重试', icon: 'none' });
     }
   },
 
-  // 拉取工单列表
   fetchOrders() {
     return new Promise((resolve) => {
       const user = this.data.currentUser;
@@ -165,10 +226,9 @@ Page({
       db.collection('orders').orderBy('createTime', 'desc').get().then(res => {
         const allOrders = res.data || [];
 
-        // 师傅角色数据过滤
         let filteredByRole = allOrders;
         if (user && user.role === 'worker') {
-          filteredByRole = allOrders.filter(o => o.workerName === user.name || o.status === '待派单');
+          filteredByRole = allOrders.filter(o => o.workerName === user.name);
         }
 
         const counts = {
@@ -195,7 +255,6 @@ Page({
     });
   },
 
-  // 搜索与 Tab 过滤
   applyFilters() {
     const { orders, currentTab, searchKey } = this.data;
     let list = [...orders];
@@ -215,7 +274,6 @@ Page({
       );
     }
 
-    // 催单优先置顶
     list.sort((a, b) => {
       const aUrgent = (a.isUrgent && !a.urgentAccepted) ? 1 : 0;
       const bUrgent = (b.isUrgent && !b.urgentAccepted) ? 1 : 0;
@@ -251,18 +309,58 @@ Page({
     wx.navigateTo({ url: '/pages/stats/stats' });
   },
 
-  // 管理员添加员工
-  openAddUserModal() {
+  openUserManageModal() {
     this.setData({
-      showAddUserModal: true,
+      showUserManageModal: true,
+      userManageTab: 'list',
       newUserName: '',
       newUserPhone: '',
-      newUserRole: 'worker'
+      newUserRole: 'worker',
+      newUserIsTest: false
     });
+    this.fetchAllUsers();
   },
 
-  closeAddUserModal() {
-    this.setData({ showAddUserModal: false });
+  closeUserManageModal() {
+    this.setData({ showUserManageModal: false });
+  },
+
+  switchUserTab(e) {
+    this.setData({ userManageTab: e.currentTarget.dataset.tab });
+  },
+
+  fetchAllUsers() {
+    const db = wx.cloud.database();
+    db.collection('users').get().then(res => {
+      this.setData({ allUserList: res.data || [] });
+    }).catch(e => console.error(e));
+  },
+
+  unbindUserOpenid(e) {
+    const { id, name } = e.currentTarget.dataset;
+    wx.showModal({
+      title: '确认解绑微信号？',
+      content: `解绑后，该账号可重新绑定新微信号。`,
+      confirmColor: '#e53935',
+      success: async (res) => {
+        if (res.confirm) {
+          wx.showLoading({ title: '正在解绑...' });
+          const db = wx.cloud.database();
+          try {
+            await db.collection('users').doc(id).update({
+              data: { openid: '' }
+            });
+            wx.hideLoading();
+            wx.showToast({ title: '已成功解绑', icon: 'success' });
+            this.fetchAllUsers();
+          } catch (err) {
+            console.error(err);
+            wx.hideLoading();
+            wx.showToast({ title: '解绑失败', icon: 'none' });
+          }
+        }
+      }
+    });
   },
 
   onNewUserNameInput(e) {
@@ -277,8 +375,12 @@ Page({
     this.setData({ newUserRole: e.detail.value });
   },
 
+  onNewUserIsTestChange(e) {
+    this.setData({ newUserIsTest: e.detail.value });
+  },
+
   async submitAddUser() {
-    const { newUserName, newUserPhone, newUserRole } = this.data;
+    const { newUserName, newUserPhone, newUserRole, newUserIsTest } = this.data;
     if (!newUserName) return wx.showToast({ title: '请输入姓名', icon: 'none' });
     if (!newUserPhone || newUserPhone.length < 11) return wx.showToast({ title: '请输入正确的11位手机号', icon: 'none' });
 
@@ -291,12 +393,20 @@ Page({
           name: newUserName,
           phone: newUserPhone,
           role: newUserRole,
+          isTest: newUserIsTest,
+          openid: '',
           createTime: new Date().toISOString()
         }
       });
       wx.hideLoading();
-      this.setData({ showAddUserModal: false });
-      wx.showToast({ title: '员工录入成功', icon: 'success' });
+      this.setData({
+        newUserName: '',
+        newUserPhone: '',
+        newUserIsTest: false,
+        userManageTab: 'list'
+      });
+      this.fetchAllUsers();
+      wx.showToast({ title: '录入成功', icon: 'success' });
     } catch (err) {
       console.error('添加失败：', err);
       wx.hideLoading();
@@ -304,7 +414,6 @@ Page({
     }
   },
 
-  // 师傅端催单提醒
   startUrgentCheckTimer() {
     this.stopUrgentCheckTimer();
     const user = this.data.currentUser;

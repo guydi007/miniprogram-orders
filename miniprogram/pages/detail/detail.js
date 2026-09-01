@@ -91,17 +91,39 @@ Page({
   },
 
   onLoad(options) {
+    // 1. 优先读取持久化缓存，防止页面刷新或直达时权限按钮丢失
+    const cachedUser = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser) || {};
+    
     this.setData({
       orderId: options.id,
-      currentUser: app.globalData.currentUser,
-      workerList: app.globalData.workerList
+      currentUser: cachedUser,
+      workerList: (app.globalData && app.globalData.workerList) || []
     });
+
+    // 2. 师傅列表兜底查询（确保管理员分配师傅列表不为空）
+    this.fetchWorkerList();
   },
 
   onShow() {
+    // 重新校准用户态
+    const cachedUser = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser) || {};
+    this.setData({ currentUser: cachedUser });
+
     if (this.data.orderId) {
       this.loadOrderDetail();
     }
+  },
+
+  // 兜底获取师傅列表
+  fetchWorkerList() {
+    const db = wx.cloud.database();
+    db.collection('users').where({ role: 'worker' }).get().then(res => {
+      const list = res.data || [];
+      this.setData({ workerList: list });
+      if (app.globalData) {
+        app.globalData.workerList = list;
+      }
+    }).catch(e => console.error('拉取师傅列表失败：', e));
   },
 
   loadOrderDetail() {
@@ -126,9 +148,13 @@ Page({
     });
   },
 
+  // 兼容旧字段 customerPhone 与 phone
   callCustomer() {
-    if (this.data.order && this.data.order.customerPhone) {
-      wx.makePhoneCall({ phoneNumber: this.data.order.customerPhone });
+    const phone = this.data.order && (this.data.order.customerPhone || this.data.order.phone);
+    if (phone) {
+      wx.makePhoneCall({ phoneNumber: phone });
+    } else {
+      wx.showToast({ title: '无客户电话记录', icon: 'none' });
     }
   },
 
@@ -212,7 +238,7 @@ Page({
   previewPhoto(e) {
     wx.previewImage({
       current: e.currentTarget.dataset.src,
-      urls: this.data.order.settlement.photos || []
+      urls: (this.data.order.settlement && this.data.order.settlement.photos) || []
     });
   },
 
@@ -567,7 +593,7 @@ Page({
   openChangeTimeModal() {
     this.setData({
       showTimeModal: true,
-      modalNewTime: this.data.order.appointmentTime || '',
+      modalNewTime: this.data.order.appointmentTime || this.data.order.time || '',
       modalChangeReason: ''
     });
   },
@@ -595,7 +621,7 @@ Page({
     const newTime = smartFormatTime(this.data.modalNewTime);
     if (!newTime) return wx.showToast({ title: '请输入有效时间', icon: 'none' });
 
-    const oldTime = this.data.order.appointmentTime;
+    const oldTime = this.data.order.appointmentTime || this.data.order.time || '';
     if (newTime === oldTime) return wx.showToast({ title: '新时间与原时间一致', icon: 'none' });
 
     const timeStr = getTimeString();
@@ -623,6 +649,7 @@ Page({
     db.collection('orders').doc(this.data.orderId).update({
       data: {
         appointmentTime: newTime,
+        time: newTime,
         timeChangeLogs: [logItem, ...(this.data.order.timeChangeLogs || [])],
         feedbacks: [systemFeedback, ...(this.data.order.feedbacks || [])]
       }
@@ -636,13 +663,28 @@ Page({
 
   onAssignWorker(e) {
     const selected = this.data.workerList[e.detail.value];
+    if (!selected) return;
+
+    const timeStr = getTimeString();
+    const opName = (this.data.currentUser && this.data.currentUser.name) || '管理员';
+
+    const systemFeedback = {
+      id: 'fb_' + Date.now(),
+      authorName: opName,
+      authorRole: (this.data.currentUser && this.data.currentUser.role) || 'admin',
+      content: `📋 管理员将工单指派给【${selected.name}】（电话：${selected.phone}）`,
+      createTime: timeStr,
+      isSystem: true
+    };
+
     const db = wx.cloud.database();
     wx.showLoading({ title: '正在指派...' });
     db.collection('orders').doc(this.data.orderId).update({
       data: {
         workerName: selected.name,
         workerPhone: selected.phone,
-        status: '已派单'
+        status: '已派单',
+        feedbacks: [systemFeedback, ...(this.data.order.feedbacks || [])]
       }
     }).then(() => {
       wx.hideLoading();

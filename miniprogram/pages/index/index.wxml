@@ -9,6 +9,7 @@
           <text class="role-badge role-{{ currentUser.role || 'unbound' }}">
             {{ currentUser.role === 'admin' ? '管理员' : (currentUser.role === 'service' ? '客服' : (currentUser.role === 'worker' ? '师傅' : '待核验')) }}
           </text>
+          <text class="role-badge test-badge" wx:if="{{ currentUser.isTest }}">🧪 测试号</text>
         </view>
         <text class="user-phone">{{ currentUser.phone ? '📱 ' + currentUser.phone : '点此绑定手机号' }}</text>
       </view>
@@ -16,7 +17,6 @@
 
     <!-- 头部操作区 -->
     <view class="header-actions" catchtap="stopBubble">
-      <!-- 管理员专属：营收统计入口 -->
       <button 
         class="btn-action btn-stats" 
         wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
@@ -27,9 +27,9 @@
       <button 
         class="btn-action btn-add-user" 
         wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
-        bindtap="openAddUserModal"
+        bindtap="openUserManageModal"
       >
-        + 员工
+        👥 员工
       </button>
       <button 
         class="btn-action btn-create" 
@@ -77,7 +77,7 @@
     >
       <view class="card-top">
         <text class="time">📅 {{ item.appointmentTime || item.time || '待定' }}</text>
-        <text class="status-tag {{ item.status === '待派单' ? 'status-pending' : (item.status === '已派单' ? 'status-assigned' : 'status-done') }}">{{ item.status }}</text>
+        <text class="status-tag {{ item.status === '待派单' ? 'status-pending' : (item.status === '已派单' ? 'status-assigned' : (item.status === '未成单' ? 'status-fail' : 'status-done')) }}">{{ item.status }}</text>
       </view>
 
       <view class="card-body">
@@ -115,7 +115,7 @@
   <view class="modal-mask" wx:if="{{ showPhoneModal }}">
     <view class="modal-box">
       <view class="modal-title">🔐 员工身份核验</view>
-      <view class="modal-desc">请输入管理员在系统中预留的手机号，系统将自动关联您的账号并解锁管理权限：</view>
+      <view class="modal-desc">请输入预留的手机号，系统将自动核验您的身份并进入系统：</view>
       
       <input 
         class="modal-input" 
@@ -126,43 +126,88 @@
         bindinput="onPhoneInput" 
       />
 
-      <button class="btn-primary mt-30" bindtap="verifyAndBindPhone">核验并绑定登录</button>
+      <button class="btn-primary mt-30" bindtap="verifyAndBindPhone">核验登录</button>
     </view>
   </view>
 
-  <!-- 管理员添加新员工弹窗 -->
-  <view class="modal-mask" wx:if="{{ showAddUserModal }}">
-    <view class="modal-box">
-      <view class="modal-title">添加新员工</view>
-      
-      <input 
-        class="modal-input mt-20" 
-        placeholder="员工姓名（如：赵师傅）" 
-        value="{{ newUserName }}" 
-        bindinput="onNewUserNameInput" 
-      />
+  <!-- 管理员专属：员工管理与录入弹窗 -->
+  <view class="modal-mask" wx:if="{{ showUserManageModal }}">
+    <view class="modal-box user-manage-modal">
+      <view class="type-switch">
+        <view class="type-btn {{ userManageTab === 'list' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="list">👥 员工列表 ({{ allUserList.length }})</view>
+        <view class="type-btn {{ userManageTab === 'add' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="add">➕ 新增员工</view>
+      </view>
 
-      <input 
-        class="modal-input mt-20" 
-        type="number" 
-        maxlength="11" 
-        placeholder="员工手机号（用于登录核验）" 
-        value="{{ newUserPhone }}" 
-        bindinput="onNewUserPhoneInput" 
-      />
+      <!-- 选项卡 1：员工列表与解绑 -->
+      <view class="user-list-box" wx:if="{{ userManageTab === 'list' }}">
+        <view class="user-manage-item" wx:for="{{ allUserList }}" wx:key="_id">
+          <view class="u-info">
+            <view class="u-name-line">
+              <text class="u-name">{{ item.name }}</text>
+              <text class="u-badge">{{ item.role === 'admin' ? '管理员' : (item.role === 'service' ? '客服' : '师傅') }}</text>
+              <text class="u-badge test-badge" wx:if="{{ item.isTest }}">🧪 测试号</text>
+            </view>
+            <text class="u-phone">📱 {{ item.phone }}</text>
+            <text class="u-status {{ item.isTest ? 'test-status' : (item.openid ? 'bound' : 'unbound') }}">
+              {{ item.isTest ? '⚡ 免锁账号（可自由切换）' : (item.openid ? '🟢 已绑定微信号' : '⚪ 待首次登录绑定') }}
+            </text>
+          </view>
+          
+          <view class="u-actions">
+            <button 
+              class="btn-unbind" 
+              size="mini" 
+              bindtap="unbindUserOpenid" 
+              data-id="{{ item._id }}" 
+              data-name="{{ item.name }}"
+              wx:if="{{ item.openid && !item.isTest }}"
+            >
+              解绑微信
+            </button>
+          </view>
+        </view>
+        <view class="empty-stats" wx:if="{{ allUserList.length === 0 }}">暂无员工数据</view>
+      </view>
 
-      <view class="role-select-box mt-20">
-        <text class="role-label">分配角色：</text>
-        <radio-group class="role-radio-group" bindchange="onNewUserRoleChange">
-          <label class="radio-item"><radio value="worker" checked="{{ newUserRole === 'worker' }}" />师傅</label>
-          <label class="radio-item"><radio value="service" checked="{{ newUserRole === 'service' }}" />客服</label>
-          <label class="radio-item"><radio value="admin" checked="{{ newUserRole === 'admin' }}" />管理员</label>
-        </radio-group>
+      <!-- 选项卡 2：录入新员工 -->
+      <view class="user-add-box" wx:if="{{ userManageTab === 'add' }}">
+        <input 
+          class="modal-input mt-20" 
+          placeholder="员工姓名（如：赵师傅）" 
+          value="{{ newUserName }}" 
+          bindinput="onNewUserNameInput" 
+        />
+
+        <input 
+          class="modal-input mt-20" 
+          type="number" 
+          maxlength="11" 
+          placeholder="员工手机号（用于登录核验）" 
+          value="{{ newUserPhone }}" 
+          bindinput="onNewUserPhoneInput" 
+        />
+
+        <view class="role-select-box mt-20">
+          <text class="role-label">分配角色：</text>
+          <radio-group class="role-radio-group" bindchange="onNewUserRoleChange">
+            <label class="radio-item"><radio value="worker" checked="{{ newUserRole === 'worker' }}" />师傅</label>
+            <label class="radio-item"><radio value="service" checked="{{ newUserRole === 'service' }}" />客服</label>
+            <label class="radio-item"><radio value="admin" checked="{{ newUserRole === 'admin' }}" />管理员</label>
+          </radio-group>
+        </view>
+
+        <!-- 方案 1：测试账号勾选开关 -->
+        <view class="test-switch-row mt-20">
+          <text class="test-switch-label">🧪 设为免锁测试号：</text>
+          <switch checked="{{ newUserIsTest }}" color="#07c160" bindchange="onNewUserIsTestChange" />
+        </view>
+        <view class="test-switch-tip">开启后该账号不绑定任何微信，可在多台手机随时切换登录用于测试。</view>
+
+        <button class="btn-primary mt-30" bindtap="submitAddUser">确认录入</button>
       </view>
 
       <view class="modal-btns mt-30">
-        <button class="modal-btn cancel" bindtap="closeAddUserModal">取消</button>
-        <button class="modal-btn confirm" bindtap="submitAddUser">确认录入</button>
+        <button class="modal-btn cancel" bindtap="closeUserManageModal">关闭</button>
       </view>
     </view>
   </view>
