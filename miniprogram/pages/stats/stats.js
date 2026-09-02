@@ -5,15 +5,26 @@ function formatDate(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-// 提取工单中的规范日期 YYYY-MM-DD
+// 提取用于营收统计的日期（优先取实际收款结单时间 finishTime）
 function extractOrderDate(order) {
-  const str = order.appointmentTime || order.time || order.createTime || '';
-  const match = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  // 优先取结算收款时间，其次取创建时间，最后取预约时间
+  const raw = order.finishTime || order.createTime || order.appointmentTime || '';
+  if (!raw) return '';
+
+  // 尝试标准 ISO/日期字符串解析本地日期
+  const d = new Date(raw);
+  if (!isNaN(d.getTime())) {
+    return formatDate(d);
+  }
+
+  // 兼容纯文本正则提取 YYYY-MM-DD
+  const match = String(raw).match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
   if (match) {
     const pad = (n) => (n < 10 ? '0' + n : '' + n);
     return `${match[1]}-${pad(parseInt(match[2], 10))}-${pad(parseInt(match[3], 10))}`;
   }
-  return str.slice(0, 10);
+
+  return String(raw).slice(0, 10);
 }
 
 Page({
@@ -28,7 +39,7 @@ Page({
     workerOptions: ['全部师傅'],
     selectedWorkerName: '全部师傅',
 
-    // 统计数据看板
+    // 统计看板数据
     stats: {
       paidTotal: '0.00',
       wechatTotal: '0.00',
@@ -40,12 +51,10 @@ Page({
       avgTicket: '0.00'
     },
 
-    // 师傅排行榜
     workerStatsList: []
   },
 
   onLoad() {
-    // 1. 权限校验：优先读取本地持久化缓存，防止内存丢失误判
     const user = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
     if (!user || user.role !== 'admin') {
       return wx.showModal({
@@ -78,7 +87,7 @@ Page({
     }).catch(e => console.error('获取师傅列表失败：', e));
   },
 
-  // 突破小程序前端 20 条查询上限，批量拉取完整工单
+  // 突破小程序前端 20 条查询限制，分页加载全部工单
   async loadAllOrders() {
     wx.showLoading({ title: '正在核算营收...' });
     const db = wx.cloud.database();
@@ -105,7 +114,7 @@ Page({
       this.calculateStats();
       wx.hideLoading();
     } catch (err) {
-      console.error('拉取全部工单失败：', err);
+      console.error('拉取工单失败：', err);
       wx.hideLoading();
       wx.showToast({ title: '数据拉取失败', icon: 'none' });
     }
@@ -155,7 +164,7 @@ Page({
     });
   },
 
-  // 核心统计计算引擎（已兼容定金单与全款单核算）
+  // 严密财务计算核心
   calculateStats() {
     const { allOrders, currentPeriod, startDate, endDate, selectedWorkerName, workerOptions } = this.data;
     const now = new Date();
@@ -171,7 +180,7 @@ Page({
       periodText = `${startDate} 至 ${endDate}`;
     }
 
-    // 1. 日期区间过滤
+    // 1. 日期过滤
     let filtered = allOrders.filter(o => {
       const orderDate = extractOrderDate(o);
       if (!orderDate) return false;
@@ -183,7 +192,6 @@ Page({
       filtered = filtered.filter(o => o.workerName === selectedWorkerName);
     }
 
-    // 3. 财务核算
     let wechat = 0;
     let alipay = 0;
     let cash = 0;
@@ -209,39 +217,47 @@ Page({
         };
       }
 
-      // 只要有结单收款数据（全款单或已收定金单），均纳入财务核算
-      if (o.settlement && o.dealType !== 'failed') {
-        const s = o.settlement;
-        const w = parseFloat(s.wechat) || 0;
-        const a = parseFloat(s.alipay) || 0;
-        const c = parseFloat(s.cash) || 0;
-        const p = parseFloat(s.paidTotal) || (w + a + c);
-        const b = parseFloat(s.balanceAmount) || 0;
-
-        wechat += w;
-        alipay += a;
-        cash += c;
-        paidTotal += p;
-        balanceTotal += b;
-
-        // 已完工或已收取定金均计为成单
-        dealCount += 1;
-
-        workerMap[wName].wechat += w;
-        workerMap[wName].alipay += a;
-        workerMap[wName].cash += c;
-        workerMap[wName].paidTotal += p;
-        workerMap[wName].balanceTotal += b;
-        workerMap[wName].dealCount += 1;
-      } else if (o.status === '未成单' || o.dealType === 'failed') {
+      // 未成单统计
+      if (o.status === '未成单' || o.dealType === 'failed') {
         failCount += 1;
         workerMap[wName].failCount += 1;
+        return;
+      }
+
+      // 提取各项实收款项（平铺字段兼容老版 settlement 对象）
+      const oldS = o.settlement || {};
+      const curCash = Number(o.cashAmount) || Number(oldS.cash) || 0;
+      const curWechat = Number(o.wechatAmount) || Number(oldS.wechat) || 0;
+      const curAlipay = Number(o.alipayAmount) || Number(oldS.alipay) || 0;
+      
+      // 实收定金或实收全款总计
+      const curPaid = Number(o.finalAmount) || Number(o.depositAmount) || Number(oldS.paidTotal) || (curCash + curWechat + curAlipay);
+      // 待收尾款
+      const curBalance = Number(o.remainingAmount) || Number(oldS.balanceAmount) || 0;
+
+      // 只要该工单有收款行为（已完工、预付款单或实收款大于0），计入营收
+      const isPaidOrder = o.status === '已完工' || o.settleType === '预付款' || curPaid > 0;
+
+      if (isPaidOrder) {
+        wechat += curWechat;
+        alipay += curAlipay;
+        cash += curCash;
+        paidTotal += curPaid;
+        balanceTotal += curBalance;
+        dealCount += 1;
+
+        workerMap[wName].wechat += curWechat;
+        workerMap[wName].alipay += curAlipay;
+        workerMap[wName].cash += curCash;
+        workerMap[wName].paidTotal += curPaid;
+        workerMap[wName].balanceTotal += curBalance;
+        workerMap[wName].dealCount += 1;
       }
     });
 
     const avgTicket = dealCount > 0 ? (paidTotal / dealCount).toFixed(2) : '0.00';
 
-    // 4. 师傅排行榜过滤
+    // 师傅排行榜格式化
     const workerStatsList = Object.values(workerMap)
       .filter(w => {
         if (w.name === '未分配') return false;

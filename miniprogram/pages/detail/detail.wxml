@@ -1,385 +1,451 @@
-<view class="container">
-  <!-- 1. 订单基本信息卡片 -->
-  <view class="card">
-    <view class="card-header">
-      <text class="title">工单详情</text>
-      <text class="status-badge {{ order.status === '已完工' ? 'status-done' : (order.status === '已派单' ? 'status-assigned' : (order.status === '未成单' ? 'status-fail' : 'status-pending')) }}">{{ order.status }}</text>
+<view class="container" wx:if="{{ order }}">
+  <!-- 1. 工单头部状态与金额总览 -->
+  <view class="detail-card header-card">
+    <view class="status-badge-row">
+      <text class="city-tag">{{ order.city || '未标记城市' }}</text>
+      <text class="status-tag {{ order.status === '待派单' ? 'status-pending' : (order.status === '已派单' ? 'status-assigned' : (order.status === '未成单' ? 'status-fail' : 'status-done')) }}">{{ order.status }}</text>
     </view>
-
-    <!-- 预约时间与修改 -->
-    <view class="detail-item">
-      <text class="label">预约时间：</text>
-      <view class="val flex-row-between">
-        <text class="font-bold highlight-time">{{ order.appointmentTime }}</text>
-        <button 
-          wx:if="{{ currentUser.role === 'admin' || currentUser.role === 'service' }}" 
-          class="btn-edit-time" 
-          size="mini" 
-          bindtap="openChangeTimeModal"
-        >
-          修改时间 ✏️
-        </button>
+    <view class="urgent-banner" wx:if="{{ order.isUrgent }}">🚨 客户已催单！请优先处理</view>
+    
+    <!-- 预付款模式总览展示 -->
+    <view class="amount-banner prepay-banner" wx:if="{{ order.settleType === '预付款' }}">
+      <view class="banner-title">📑 工程总计：¥{{ order.totalAmount || 0 }}</view>
+      <view class="banner-sub">
+        已收定金合计：<text class="bold-text">¥{{ order.depositAmount || order.finalAmount || 0 }}</text>（待收尾款：¥{{ order.remainingAmount || 0 }}）
+      </view>
+      <view class="banner-split" wx:if="{{ order.wechatAmount || order.alipayAmount || order.cashAmount }}">
+        渠道明细：微信 ¥{{ order.wechatAmount || 0 }} | 支付宝 ¥{{ order.alipayAmount || 0 }} | 现金 ¥{{ order.cashAmount || 0 }}
       </view>
     </view>
 
-    <view class="detail-item">
-      <text class="label">客户电话：</text>
-      <text class="val phone-link" bindtap="callCustomer">{{ order.customerPhone }} 📞</text>
-    </view>
-    <view class="detail-item"><text class="label">服务地址：</text><text class="val">{{ order.address }}</text></view>
-    <view class="detail-item"><text class="label">订单来源：</text><text class="val">{{ order.source }}</text></view>
-    <view class="detail-item"><text class="label">录单客服：</text><text class="val">{{ order.serviceName }}</text></view>
-    <view class="detail-item"><text class="label">指派师傅：</text><text class="val highlight">{{ order.workerName || '未分配' }}</text></view>
-    <view class="detail-item"><text class="label">初始备注：</text><text class="val">{{ order.remark || '无' }}</text></view>
-    <view class="detail-item"><text class="label">创建时间：</text><text class="val sub-val">{{ order.createTime }}</text></view>
-
-    <!-- 操作区域：严格按权限隔离 -->
-    <view class="action-row">
-      <!-- 管理员专属：分配师傅 -->
-      <picker wx:if="{{ currentUser.role === 'admin' }}" bindchange="onAssignWorker" range="{{ workerList }}" range-key="name">
-        <button class="btn btn-assign" size="mini">分配师傅</button>
-      </picker>
-
-      <!-- 管理员与客服：修改订单备注 -->
-      <button wx:if="{{ currentUser.role === 'admin' || currentUser.role === 'service' }}" class="btn btn-edit" size="mini" bindtap="editOrderRemark">修改备注</button>
-      
-      <!-- 仅【客服】可见可操作：追加催单 -->
-      <button wx:if="{{ currentUser.role === 'service' && order.status !== '已完工' && order.status !== '未成单' }}" class="btn btn-fail" size="mini" bindtap="openUrgeModal">🔥 追加催单</button>
-
-      <!-- 仅【师傅】可见可操作：成单结单 与 未成单 -->
-      <block wx:if="{{ currentUser.role === 'worker' && order.status !== '已完工' && order.status !== '未成单' }}">
-        <button class="btn btn-deal" size="mini" bindtap="openDealModal">🎉 成单结单</button>
-        <button class="btn btn-fail" size="mini" bindtap="openFailModal">❌ 未成单</button>
-      </block>
+    <!-- 全款完工模式总览展示 -->
+    <view class="amount-banner" wx:elif="{{ order.status === '已完工' && (order.finalAmount || order.totalAmount) }}">
+      <view class="banner-title">💰 实收合计金额：¥{{ order.finalAmount || 0 }}</view>
+      <view class="banner-split" wx:if="{{ order.wechatAmount || order.alipayAmount || order.cashAmount }}">
+        渠道明细：微信 ¥{{ order.wechatAmount || 0 }} | 支付宝 ¥{{ order.alipayAmount || 0 }} | 现金 ¥{{ order.cashAmount || 0 }}
+      </view>
     </view>
   </view>
 
-  <!-- 2. 成单结算明细展示卡片（成单后展示） -->
-  <view class="card settlement-card" wx:if="{{ order.dealType && order.dealType !== 'failed' }}">
-    <view class="card-header">
-      <view class="title-with-badge">
-        <text class="title">💰 结算款项明细</text>
-        <text class="deal-type-tag {{ order.dealType === 'full' ? 'deal-full' : 'deal-prepay' }}">
-          {{ order.dealType === 'full' ? '全款结单' : '预付定金单' }}
-        </text>
-      </view>
-      <!-- 仅师傅可见：修改金额 -->
-      <button 
-        wx:if="{{ currentUser.role === 'worker' }}" 
-        class="btn-edit-amount" 
-        size="mini" 
-        bindtap="openEditAmountModal"
-      >
-        修改金额 ✏️
+  <!-- 2. 工单基础信息 -->
+  <view class="detail-card">
+    <view class="section-title">📋 基础信息</view>
+    <view class="info-row">
+      <text class="info-label">客户电话：</text>
+      <text class="info-val phone" bindtap="callCustomer">{{ order.customerPhone }} 📞</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">服务地址：</text>
+      <text class="info-val">{{ order.address ? '📍 ' + order.address : '-' }}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">预约时间：</text>
+      <text class="info-val highlight">{{ order.appointmentTime }}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">主派师傅：</text>
+      <text class="info-val highlight">{{ order.workerName || '未指派' }}</text>
+    </view>
+    <view class="info-row" wx:if="{{ order.workerGroupId }}">
+      <text class="info-label">师傅群号：</text>
+      <text class="info-val">{{ order.workerGroupId }}</text>
+    </view>
+    <view class="info-row" wx:if="{{ order.companionWorkers }}">
+      <text class="info-label">同行人员：</text>
+      <text class="info-val">{{ order.companionWorkers }}</text>
+    </view>
+    <view class="info-row" wx:if="{{ order.source }}">
+      <text class="info-label">订单来源：</text>
+      <text class="info-val">{{ order.source }}</text>
+    </view>
+    <!-- 🌟 展示录单人信息 -->
+    <view class="info-row" wx:if="{{ order.creatorName }}">
+      <text class="info-label">录单人：</text>
+      <text class="info-val">{{ order.creatorName }}</text>
+    </view>
+    <!-- 准确格式化的结算时间 -->
+    <view class="info-row" wx:if="{{ order.finishTime }}">
+      <text class="info-label">{{ order.settleType === '预付款' ? '最新收款时间：' : '结算时间：' }}</text>
+      <text class="info-val">{{ order.finishTimeFormatted || order.finishTime }}</text>
+    </view>
+  </view>
+
+  <!-- 3. 最新施工凭证照片 -->
+  <view class="detail-card" wx:if="{{ order.finishPhotos && order.finishPhotos.length }}">
+    <view class="section-title">📸 最新完工凭据照片</view>
+    <view class="photo-grid">
+      <image 
+        class="finish-img" 
+        wx:for="{{ order.finishPhotos }}" 
+        wx:key="*this" 
+        src="{{ item }}" 
+        mode="aspectFill" 
+        bindtap="previewPhoto" 
+        data-url="{{ item }}"
+        data-list="{{ order.finishPhotos }}"
+      />
+    </view>
+    <view class="finish-note" wx:if="{{ order.finishNote }}">
+      <text class="note-label">施工说明：</text>{{ order.finishNote }}
+    </view>
+  </view>
+
+  <!-- 4. 操作按钮栏（位于流水与回馈上方，层级清晰） -->
+  <view class="actions-bar">
+    <!-- 仅客服可见：催单 -->
+    <button 
+      class="btn-action btn-urgent" 
+      wx:if="{{ currentUser && currentUser.role === 'service' && order.status !== '已完工' && order.status !== '未成单' }}" 
+      bindtap="triggerUrgent"
+    >
+      🚨 催单
+    </button>
+
+    <!-- 仅管理员可见：指派/改派师傅 -->
+    <picker 
+      wx:if="{{ currentUser && currentUser.role === 'admin' && order.status !== '已完工' && order.status !== '未成单' }}" 
+      bindchange="onAssignWorker" 
+      range="{{ candidateWorkerNames }}"
+      class="picker-btn-wrapper"
+    >
+      <button class="btn-action btn-assign">
+        {{ order.workerName ? '改派师傅' : '指派师傅' }}
       </button>
-    </view>
+    </picker>
 
-    <!-- 款项详情 -->
-    <view class="money-grid">
-      <view class="money-item" wx:if="{{ order.dealType === 'prepay' }}">
-        <text class="money-lbl">订单总额</text>
-        <text class="money-val font-orange">¥ {{ order.settlement.totalAmount || 0 }}</text>
-      </view>
-      <view class="money-item" wx:if="{{ order.dealType === 'prepay' }}">
-        <text class="money-lbl">剩余待收尾款</text>
-        <text class="money-val font-red">¥ {{ order.settlement.balanceAmount || 0 }}</text>
-      </view>
-      <view class="money-item">
-        <text class="money-lbl">微信收款</text>
-        <text class="money-val">¥ {{ order.settlement.wechat || 0 }}</text>
-      </view>
-      <view class="money-item">
-        <text class="money-lbl">支付宝收款</text>
-        <text class="money-val">¥ {{ order.settlement.alipay || 0 }}</text>
-      </view>
-      <view class="money-item">
-        <text class="money-lbl">现金收款</text>
-        <text class="money-val">¥ {{ order.settlement.cash || 0 }}</text>
-      </view>
-      <view class="money-item highlight-total">
-        <text class="money-lbl">{{ order.dealType === 'prepay' ? '已付定金合计' : '实收全款合计' }}</text>
-        <text class="money-val total-val">¥ {{ order.settlement.paidTotal || 0 }}</text>
+    <!-- 🌟 恢复：工单进度回馈按钮（未成单外均可回馈） -->
+    <button 
+      class="btn-action btn-feedback" 
+      wx:if="{{ order.status !== '未成单' }}" 
+      bindtap="openFeedbackModal"
+    >
+      💬 进度回馈
+    </button>
+
+    <!-- 仅师傅可见：未成单 -->
+    <button 
+      class="btn-action btn-fail" 
+      wx:if="{{ currentUser && currentUser.role === 'worker' && order.status !== '未成单' && order.status !== '已完工' }}" 
+      bindtap="markFail"
+    >
+      未成单
+    </button>
+
+    <!-- 仅师傅可见：预付单（二选一互斥） -->
+    <button 
+      class="btn-action btn-prepay" 
+      wx:if="{{ currentUser && currentUser.role === 'worker' && order.status !== '未成单' && (!order.settleType || order.settleType === '预付款') }}" 
+      bindtap="openPrepayModal"
+    >
+      {{ order.settleType === '预付款' ? (order.remainingAmount > 0 ? '续收/结清尾款' : '修改预付单') : '预付单' }}
+    </button>
+
+    <!-- 仅师傅可见：全款结单（二选一互斥） -->
+    <button 
+      class="btn-action btn-done" 
+      wx:if="{{ currentUser && currentUser.role === 'worker' && order.status !== '未成单' && (!order.settleType || order.settleType === '全款') }}" 
+      bindtap="openFinishModal"
+    >
+      {{ order.settleType === '全款' ? '修改全款结算' : '全款结单' }}
+    </button>
+  </view>
+
+  <!-- 5. 🌟 恢复：施工与进度回馈记录流 -->
+  <view class="detail-card" wx:if="{{ order.feedbacks && order.feedbacks.length }}">
+    <view class="section-title">💬 施工与进度回馈 ({{ order.feedbacks.length }})</view>
+    <view class="log-timeline">
+      <view class="log-item feedback-log-item" wx:for="{{ order.feedbacks }}" wx:key="id">
+        <view class="log-header">
+          <view class="log-time">{{ item.timeFormatted || item.time }}</view>
+          <view class="log-operator">{{ item.operatorName }} ({{ item.operatorRole === 'worker' ? '师傅' : (item.operatorRole === 'service' ? '客服' : '管理') }})</view>
+        </view>
+        <view class="log-body">
+          <view class="feedback-text">{{ item.content }}</view>
+          <view class="log-photos" wx:if="{{ item.photos && item.photos.length }}">
+            <image 
+              class="log-thumb" 
+              wx:for="{{ item.photos }}" 
+              wx:for-item="p" 
+              wx:key="*this" 
+              src="{{ p }}" 
+              mode="aspectFill"
+              bindtap="previewPhoto"
+              data-url="{{ p }}"
+              data-list="{{ item.photos }}"
+            />
+          </view>
+        </view>
       </view>
     </view>
+  </view>
 
-    <!-- 现场照片展示与追加 -->
-    <view class="photo-section">
-      <view class="photo-header">
-        <text class="photo-title">📷 现场照片与凭证 ({{ (order.settlement.photos && order.settlement.photos.length) || 0 }})</text>
-        <!-- 仅师傅可见：追加拍照 -->
-        <text 
-          wx:if="{{ currentUser.role === 'worker' }}" 
-          class="btn-append-photo" 
-          bindtap="appendMorePhotos"
-        >
-          + 追加拍照
-        </text>
+  <!-- 6. 支付与修改历史记录流水 -->
+  <view class="detail-card" wx:if="{{ order.paymentLogs && order.paymentLogs.length }}">
+    <view class="section-title">📜 支付与修改记录 ({{ order.paymentLogs.length }})</view>
+    <view class="log-timeline">
+      <view class="log-item" wx:for="{{ order.paymentLogs }}" wx:key="id">
+        <view class="log-header">
+          <view class="log-time">{{ item.timeFormatted || item.time }}</view>
+          <view class="log-operator">{{ item.operatorName }} ({{ item.operatorRole === 'worker' ? '师傅' : '管理' }})</view>
+        </view>
+        
+        <view class="log-body">
+          <view class="log-type-tag {{ item.settleType === '全款' ? 'tag-full' : 'tag-prepay' }}">
+            {{ item.settleType }}记录
+          </view>
+          
+          <view class="log-amount-row" wx:if="{{ item.settleType === '全款' }}">
+            <text class="log-strong">实收合计：¥{{ item.currentPaid }}</text>
+            <text class="log-sub">（现金:{{ item.cashAmount || 0 }} / 微信:{{ item.wechatAmount || 0 }} / 支付宝:{{ item.alipayAmount || 0 }}）</text>
+          </view>
+          
+          <view class="log-amount-row" wx:if="{{ item.settleType === '预付款' }}">
+            <text class="log-strong">定金合计：¥{{ item.currentPaid }}</text>
+            <text class="log-sub">（总计:¥{{ item.totalAmount }} / 待收尾款:¥{{ item.remainingAmount }}）</text>
+          </view>
+
+          <view class="log-companion" wx:if="{{ item.companionWorkers }}">
+            👥 同行人员：{{ item.companionWorkers }}
+          </view>
+
+          <view class="log-note" wx:if="{{ item.note }}">
+            📝 备注：{{ item.note }}
+          </view>
+
+          <view class="log-photos" wx:if="{{ item.photos && item.photos.length }}">
+            <image 
+              class="log-thumb" 
+              wx:for="{{ item.photos }}" 
+              wx:for-item="p" 
+              wx:key="*this" 
+              src="{{ p }}" 
+              mode="aspectFill"
+              bindtap="previewPhoto"
+              data-url="{{ p }}"
+              data-list="{{ item.photos }}"
+            />
+          </view>
+        </view>
       </view>
-      <view class="photo-grid" wx:if="{{ order.settlement.photos && order.settlement.photos.length > 0 }}">
-        <image 
-          class="photo-thumb" 
-          wx:for="{{ order.settlement.photos }}" 
-          wx:key="*this" 
-          src="{{ item }}" 
-          mode="aspectFill" 
-          bindtap="previewPhoto" 
-          data-src="{{ item }}" 
+    </view>
+  </view>
+
+  <!-- 7. 进度回馈录入弹窗 -->
+  <view class="modal-mask" wx:if="{{ showFeedbackModal }}">
+    <view class="modal-box">
+      <view class="modal-title">💬 提交施工与进度回馈</view>
+      
+      <view class="field-item">
+        <text class="field-label required">回馈内容说明：</text>
+        <textarea 
+          class="modal-textarea" 
+          placeholder="如：已上门排查，主板受潮需更换配件；或客户改约明日等..." 
+          value="{{ feedbackContent }}" 
+          bindinput="onFeedbackContentInput" 
         />
       </view>
-      <view class="empty-photo" wx:else>
-        <text>暂无现场照片</text>
-      </view>
-    </view>
-  </view>
 
-  <!-- 3. 未成单原因卡片（未成单后展示） -->
-  <view class="card fail-card" wx:if="{{ order.dealType === 'failed' }}">
-    <view class="card-header">
-      <text class="title font-red">⚠️ 未成单记录</text>
-      <text class="status-badge status-fail">未成单</text>
-    </view>
-    <view class="detail-item">
-      <text class="label">未成单原因：</text>
-      <text class="val font-bold">{{ order.unsettledReason || '无' }}</text>
-    </view>
-  </view>
-
-  <!-- 4. 金额修改留痕记录 -->
-  <view class="card history-card" wx:if="{{ order.amountChangeLogs && order.amountChangeLogs.length > 0 }}">
-    <view class="card-header">
-      <text class="title-sub">📝 金额变更记录 ({{ order.amountChangeLogs.length }})</text>
-    </view>
-    <view class="log-item" wx:for="{{ order.amountChangeLogs }}" wx:key="index">
-      <view class="log-meta">
-        <text class="log-author">{{ item.operator }}</text>
-        <text class="log-time">{{ item.time }}</text>
-      </view>
-      <view class="log-content">{{ item.changeText }}</view>
-      <view class="log-reason" wx:if="{{ item.reason }}">原因：{{ item.reason }}</view>
-    </view>
-  </view>
-
-  <!-- 5. 拍照上传留痕记录 -->
-  <view class="card history-card" wx:if="{{ order.photoChangeLogs && order.photoChangeLogs.length > 0 }}">
-    <view class="card-header">
-      <text class="title-sub">📸 照片上传记录 ({{ order.photoChangeLogs.length }})</text>
-    </view>
-    <view class="log-item" wx:for="{{ order.photoChangeLogs }}" wx:key="index">
-      <view class="log-meta">
-        <text class="log-author">{{ item.operator }}</text>
-        <text class="log-time">{{ item.time }}</text>
-      </view>
-      <view class="log-content">{{ item.note }}</view>
-    </view>
-  </view>
-
-  <!-- 6. 预约时间修改记录 -->
-  <view class="card history-card" wx:if="{{ order.timeChangeLogs && order.timeChangeLogs.length > 0 }}">
-    <view class="card-header">
-      <text class="title-sub">⏱️ 预约时间变更记录 ({{ order.timeChangeLogs.length }})</text>
-    </view>
-    <view class="log-item" wx:for="{{ order.timeChangeLogs }}" wx:key="index">
-      <view class="log-meta">
-        <text class="log-author">{{ item.operator }}</text>
-        <text class="log-time">{{ item.changeTime }}</text>
-      </view>
-      <view class="log-content">
-        从 <text class="strike">{{ item.oldTime }}</text> 改为 <text class="new-val">{{ item.newTime }}</text>
-      </view>
-      <view class="log-reason" wx:if="{{ item.reason }}">原因：{{ item.reason }}</view>
-    </view>
-  </view>
-
-  <!-- 7. 处理反馈与进展流水 -->
-  <view class="card feedback-card">
-    <view class="card-header">
-      <text class="title">处理反馈与进展 ({{ order.feedbacks.length }})</text>
-    </view>
-
-    <view class="feedback-list">
-      <view class="feedback-item {{ item.isSystem ? 'system-fb' : '' }}" wx:for="{{ order.feedbacks }}" wx:key="id">
-        <view class="fb-meta">
-          <text class="fb-author">{{ item.authorName }} ({{ item.authorRole === 'worker' ? '师傅' : (item.authorRole === 'admin' ? '管理员' : '客服') }})</text>
-          <text class="fb-time">{{ item.createTime }}</text>
-        </view>
-        <view class="fb-content">{{ item.content }}</view>
-        <view class="fb-actions" wx:if="{{ !item.isSystem && (currentUser.role === 'admin' || currentUser.role === 'service') }}">
-          <text class="action-btn" bindtap="editFeedback" data-id="{{ item.id }}" data-content="{{ item.content }}">修改反馈</text>
-        </view>
-      </view>
-
-      <view class="empty-fb" wx:if="{{ order.feedbacks.length === 0 }}">
-        <text>暂无反馈记录</text>
-      </view>
-    </view>
-
-    <view class="input-area">
-      <textarea class="fb-textarea" placeholder="输入新的处理进展/现场反馈..." value="{{ newFeedback }}" bindinput="onFeedbackInput" />
-      <button class="btn btn-submit" bindtap="submitFeedback">追加录入反馈</button>
-    </view>
-  </view>
-
-  <!-- ==================== 弹窗区域 ==================== -->
-
-  <!-- 弹窗 A：师傅【成单结单】弹窗 -->
-  <view class="modal-mask" wx:if="{{ showDealModal }}">
-    <view class="modal-box deal-modal-box">
-      <view class="modal-title">🎉 成单结单</view>
-
-      <!-- 结单类型切换 -->
-      <view class="type-switch">
-        <view class="type-btn {{ dealTypeTab === 'full' ? 'type-active' : '' }}" bindtap="switchDealTab" data-type="full">全款结单</view>
-        <view class="type-btn {{ dealTypeTab === 'prepay' ? 'type-active' : '' }}" bindtap="switchDealTab" data-type="prepay">预付单 (定金)</view>
-      </view>
-
-      <!-- 预付单特有：订单总额 -->
-      <view class="form-row mt-20" wx:if="{{ dealTypeTab === 'prepay' }}">
-        <text class="input-lbl">订单总额 (元)：</text>
-        <input class="m-input" type="digit" placeholder="0.00" value="{{ dealForm.totalAmount }}" bindinput="onDealFormInput" data-field="totalAmount" />
-      </view>
-
-      <!-- 支付方式金额录入 -->
-      <view class="money-inputs-box">
-        <view class="form-row">
-          <text class="input-lbl">微信支付 (元)：</text>
-          <input class="m-input" type="digit" placeholder="0.00" value="{{ dealForm.wechat }}" bindinput="onDealFormInput" data-field="wechat" />
-        </view>
-        <view class="form-row">
-          <text class="input-lbl">支付宝 (元)：</text>
-          <input class="m-input" type="digit" placeholder="0.00" value="{{ dealForm.alipay }}" bindinput="onDealFormInput" data-field="alipay" />
-        </view>
-        <view class="form-row">
-          <text class="input-lbl">现金支付 (元)：</text>
-          <input class="m-input" type="digit" placeholder="0.00" value="{{ dealForm.cash }}" bindinput="onDealFormInput" data-field="cash" />
-        </view>
-      </view>
-
-      <!-- 金额汇总预览 -->
-      <view class="sum-preview">
-        <text>实收金额合计：<text class="font-orange font-bold">¥ {{ dealFormCalculated.paidTotal }}</text></text>
-        <text wx:if="{{ dealTypeTab === 'prepay' }}">剩余尾款：<text class="font-red font-bold">¥ {{ dealFormCalculated.balanceAmount }}</text></text>
-      </view>
-
-      <!-- 现场拍照上传 -->
-      <view class="photo-uploader">
-        <view class="uploader-title">现场拍照 / 凭证上传（支持多张）：</view>
-        <view class="uploader-grid">
-          <view class="img-wrap" wx:for="{{ tempDealPhotos }}" wx:key="*this">
-            <image class="upload-img" src="{{ item }}" mode="aspectFill" bindtap="previewTempPhoto" data-src="{{ item }}" />
-            <text class="del-btn" bindtap="deleteTempPhoto" data-index="{{ index }}">✕</text>
+      <view class="field-item mt-20">
+        <text class="field-label">现场照片（选填，支持多张）：</text>
+        <view class="upload-photo-box">
+          <view class="photo-thumb" wx:for="{{ feedbackPhotos }}" wx:key="*this">
+            <image class="thumb-img" src="{{ item }}" mode="aspectFill" />
+            <text class="del-btn" bindtap="deleteFeedbackPhoto" data-index="{{ index }}">✕</text>
           </view>
-          <view class="add-img-btn" bindtap="chooseDealPhotos" wx:if="{{ tempDealPhotos.length < 9 }}">+</view>
+          <view class="add-photo-btn" bindtap="chooseFeedbackPhoto" wx:if="{{ feedbackPhotos.length < 4 }}">
+            <text class="plus">+</text>
+            <text class="tip">拍现场</text>
+          </view>
         </view>
       </view>
 
-      <view class="modal-btns">
-        <button class="modal-btn cancel" bindtap="closeDealModal">取消</button>
-        <button class="modal-btn confirm" bindtap="submitDealOrder">确认完成结单</button>
+      <view class="modal-btns mt-30">
+        <button class="modal-btn cancel" bindtap="closeFeedbackModal">取消</button>
+        <button class="modal-btn confirm" bindtap="submitFeedback">提交回馈</button>
       </view>
     </view>
   </view>
 
-  <!-- 弹窗 B：师傅【未成单】弹窗 -->
-  <view class="modal-mask" wx:if="{{ showFailModal }}">
+  <!-- 8. 专属弹窗：全款完工结单录入/修改 -->
+  <view class="modal-mask" wx:if="{{ showFinishModal && settleMode === 'full' }}">
     <view class="modal-box">
-      <view class="modal-title font-red">❌ 标记为未成单</view>
-      <view class="modal-desc">请填写未成单原因备注（例如：客户改期、嫌报价贵、现场条件无法施工等）：</view>
-      
-      <textarea 
-        class="modal-textarea" 
-        placeholder="请输入未成单详细原因备注..." 
-        value="{{ failRemark }}" 
-        bindinput="onFailRemarkInput" 
-      />
+      <view class="modal-title">🎉 全款完工结单录入/修改</view>
+
+      <view class="split-pay-grid">
+        <view class="split-item">
+          <text class="split-label">现金 (元)</text>
+          <input 
+            class="split-input" 
+            type="digit" 
+            placeholder="0" 
+            value="{{ inputCash }}" 
+            bindinput="onCashInput" 
+          />
+        </view>
+        <view class="split-item">
+          <text class="split-label">微信 (元)</text>
+          <input 
+            class="split-input" 
+            type="digit" 
+            placeholder="0" 
+            value="{{ inputWechat }}" 
+            bindinput="onWechatInput" 
+          />
+        </view>
+        <view class="split-item">
+          <text class="split-label">支付宝 (元)</text>
+          <input 
+            class="split-input" 
+            type="digit" 
+            placeholder="0" 
+            value="{{ inputAlipay }}" 
+            bindinput="onAlipayInput" 
+          />
+        </view>
+      </view>
+
+      <view class="calc-total-box">
+        <text class="calc-title">实收合计金额：</text>
+        <text class="calc-num">¥{{ fullTotal }}</text>
+      </view>
+
+      <view class="field-item mt-20">
+        <text class="field-label">同行人员（手输文本）：</text>
+        <input 
+          class="modal-input" 
+          placeholder="如：学徒小张、王师傅（无则留空）" 
+          value="{{ modalCompanions }}" 
+          bindinput="onModalCompanionsInput" 
+        />
+      </view>
+
+      <view class="field-item mt-20">
+        <text class="field-label">本次施工拍照留痕（可多次补拍）：</text>
+        <view class="upload-photo-box">
+          <view class="photo-thumb" wx:for="{{ localPhotos }}" wx:key="*this">
+            <image class="thumb-img" src="{{ item }}" mode="aspectFill" />
+            <text class="del-btn" bindtap="deletePhoto" data-index="{{ index }}">✕</text>
+          </view>
+          <view class="add-photo-btn" bindtap="chooseFinishPhoto" wx:if="{{ localPhotos.length < 4 }}">
+            <text class="plus">+</text>
+            <text class="tip">拍现场</text>
+          </view>
+        </view>
+      </view>
+
+      <view class="field-item mt-20">
+        <text class="field-label">施工/修改备注说明：</text>
+        <textarea 
+          class="modal-textarea" 
+          placeholder="更换明细、费用调整原因等..." 
+          value="{{ modalNote }}" 
+          bindinput="onModalNoteInput" 
+        />
+      </view>
 
       <view class="modal-btns mt-30">
-        <button class="modal-btn cancel" bindtap="closeFailModal">取消</button>
-        <button class="modal-btn confirm btn-fail-confirm" bindtap="submitFailOrder">确认提交未成单</button>
+        <button class="modal-btn cancel" bindtap="closeFinishModal">取消</button>
+        <button class="modal-btn confirm" bindtap="submitFinishOrder">确认保存并留痕</button>
       </view>
     </view>
   </view>
 
-  <!-- 弹窗 C：修改结算金额与明细弹窗 -->
-  <view class="modal-mask" wx:if="{{ showEditAmountModal }}">
+  <!-- 9. 专属弹窗：预付单录入与修改 -->
+  <view class="modal-mask" wx:if="{{ showFinishModal && settleMode === 'prepay' }}">
     <view class="modal-box">
-      <view class="modal-title">✏️ 修改款项金额</view>
+      <view class="modal-title">📑 预付单录入/修改</view>
 
-      <view class="form-row mt-20" wx:if="{{ order.dealType === 'prepay' }}">
-        <text class="input-lbl">订单总额 (元)：</text>
-        <input class="m-input" type="digit" value="{{ editAmountForm.totalAmount }}" bindinput="onEditAmountInput" data-field="totalAmount" />
+      <text class="field-label">已收定金拆分 (元)：</text>
+      <view class="split-pay-grid">
+        <view class="split-item">
+          <text class="split-label">现金</text>
+          <input 
+            class="split-input" 
+            type="digit" 
+            placeholder="0" 
+            value="{{ inputCash }}" 
+            bindinput="onCashInput" 
+          />
+        </view>
+        <view class="split-item">
+          <text class="split-label">微信</text>
+          <input 
+            class="split-input" 
+            type="digit" 
+            placeholder="0" 
+            value="{{ inputWechat }}" 
+            bindinput="onWechatInput" 
+          />
+        </view>
+        <view class="split-item">
+          <text class="split-label">支付宝</text>
+          <input 
+            class="split-input" 
+            type="digit" 
+            placeholder="0" 
+            value="{{ inputAlipay }}" 
+            bindinput="onAlipayInput" 
+          />
+        </view>
       </view>
 
-      <view class="form-row">
-        <text class="input-lbl">微信支付 (元)：</text>
-        <input class="m-input" type="digit" value="{{ editAmountForm.wechat }}" bindinput="onEditAmountInput" data-field="wechat" />
-      </view>
-      <view class="form-row">
-        <text class="input-lbl">支付宝 (元)：</text>
-        <input class="m-input" type="digit" value="{{ editAmountForm.alipay }}" bindinput="onEditAmountInput" data-field="alipay" />
-      </view>
-      <view class="form-row">
-        <text class="input-lbl">现金支付 (元)：</text>
-        <input class="m-input" type="digit" value="{{ editAmountForm.cash }}" bindinput="onEditAmountInput" data-field="cash" />
+      <view class="calc-total-box prepay-box">
+        <text class="calc-title">已收定金合计：</text>
+        <text class="calc-num">¥{{ depositTotal }}</text>
       </view>
 
-      <input 
-        class="m-input mt-20" 
-        placeholder="修改原因（必填，如尾款已付清/录入错误）" 
-        value="{{ editAmountReason }}" 
-        bindinput="onEditAmountReasonInput" 
-      />
+      <view class="field-item mt-20">
+        <text class="field-label required">工程总计金额 (元)：</text>
+        <input 
+          class="modal-input" 
+          type="digit" 
+          placeholder="如：800" 
+          value="{{ inputTotalAmount }}" 
+          bindinput="onTotalAmountInput" 
+        />
+      </view>
+
+      <view class="calc-remain-box">
+        待收剩余尾款：<text class="remain-num">¥{{ remainTotal }}</text>
+      </view>
+
+      <view class="field-item mt-20">
+        <text class="field-label">同行人员（手输文本）：</text>
+        <input 
+          class="modal-input" 
+          placeholder="如：学徒小赵、李师傅" 
+          value="{{ modalCompanions }}" 
+          bindinput="onModalCompanionsInput" 
+        />
+      </view>
+
+      <view class="field-item mt-20">
+        <text class="field-label">定金凭据/现场拍照（留痕）：</text>
+        <view class="upload-photo-box">
+          <view class="photo-thumb" wx:for="{{ localPhotos }}" wx:key="*this">
+            <image class="thumb-img" src="{{ item }}" mode="aspectFill" />
+            <text class="del-btn" bindtap="deletePhoto" data-index="{{ index }}">✕</text>
+          </view>
+          <view class="add-photo-btn" bindtap="chooseFinishPhoto" wx:if="{{ localPhotos.length < 4 }}">
+            <text class="plus">+</text>
+            <text class="tip">拍凭据</text>
+          </view>
+        </view>
+      </view>
+
+      <view class="field-item mt-20">
+        <text class="field-label">约定说明与修改备注：</text>
+        <textarea 
+          class="modal-textarea" 
+          placeholder="约定上门安装时间、尾款结算方式说明等..." 
+          value="{{ modalNote }}" 
+          bindinput="onModalNoteInput" 
+        />
+      </view>
 
       <view class="modal-btns mt-30">
-        <button class="modal-btn cancel" bindtap="closeEditAmountModal">取消</button>
-        <button class="modal-btn confirm" bindtap="confirmEditAmount">确认保存修改</button>
-      </view>
-    </view>
-  </view>
-
-  <!-- 弹窗 D：修改预约时间弹窗 -->
-  <view class="modal-mask" wx:if="{{ showTimeModal }}">
-    <view class="modal-box">
-      <view class="modal-title">修改预约时间</view>
-      <view class="modal-tip">支持快捷输入如 "明天 下午" 或 "2026-08-31 早上"</view>
-      
-      <input 
-        class="modal-input" 
-        placeholder="输入新时间" 
-        value="{{ modalNewTime }}" 
-        bindinput="onModalTimeInput"
-        bindblur="onModalTimeBlur" 
-      />
-
-      <input 
-        class="modal-input mt-20" 
-        placeholder="改约原因（如客户要求延后，选填）" 
-        value="{{ modalChangeReason }}" 
-        bindinput="onModalReasonInput" 
-      />
-
-      <view class="modal-btns mt-30">
-        <button class="modal-btn cancel" bindtap="closeChangeTimeModal">取消</button>
-        <button class="modal-btn confirm" bindtap="confirmChangeTime">确认更改</button>
-      </view>
-    </view>
-  </view>
-
-  <!-- 弹窗 E：客服【追加催单】弹窗 -->
-  <view class="modal-mask" wx:if="{{ showUrgeModal }}">
-    <view class="modal-box">
-      <view class="modal-title font-red">🔥 发送紧急催单</view>
-      <view class="modal-desc">确认向师傅发送紧急催单提醒吗？师傅端将每分钟弹窗提示，直至师傅点击“接受”为止。</view>
-      
-      <input 
-        class="modal-input" 
-        placeholder="催单说明（选填，如：客户在现场着急）" 
-        value="{{ urgeReason }}" 
-        bindinput="onUrgeReasonInput" 
-      />
-
-      <view class="modal-btns mt-30">
-        <button class="modal-btn cancel" bindtap="closeUrgeModal">取消</button>
-        <button class="modal-btn confirm btn-fail-confirm" bindtap="submitUrgeOrder">确认发送催单</button>
+        <button class="modal-btn cancel" bindtap="closeFinishModal">取消</button>
+        <button class="modal-btn confirm" bindtap="submitFinishOrder">确认保存并留痕</button>
       </view>
     </view>
   </view>

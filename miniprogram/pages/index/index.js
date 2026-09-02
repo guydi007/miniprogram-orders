@@ -7,6 +7,10 @@ Page({
     filteredOrders: [],
     searchKey: '',
 
+    availableCities: ['天津', '北京'],
+    userVisibleCities: ['天津', '北京'],
+    selectedCityFilter: 'all',
+
     currentTab: 'all',
     tabList: [
       { key: 'all', label: '全部' },
@@ -26,6 +30,7 @@ Page({
     showPhoneModal: false,
     inputPhone: '',
 
+    // 员工管理弹窗
     showUserManageModal: false,
     userManageTab: 'list',
     allUserList: [],
@@ -33,28 +38,31 @@ Page({
     newUserPhone: '',
     newUserRole: 'worker',
     newUserIsTest: false,
-
-    urgentTimer: null
+    newUserGroupId: '',
+    newUserCities: ['天津'],
+    newUserCitiesMap: { '天津': true }
   },
 
   onLoad() {
-    const cachedUser = wx.getStorageSync('currentUser');
-    if (cachedUser && cachedUser.phone) {
-      this.handleUserLoaded(cachedUser);
-      return;
-    }
+    this.fetchCities().finally(() => {
+      const cachedUser = wx.getStorageSync('currentUser');
+      if (cachedUser && cachedUser.phone) {
+        this.handleUserLoaded(cachedUser);
+        return;
+      }
 
-    if (app.globalData && app.globalData.currentUser) {
-      this.handleUserLoaded(app.globalData.currentUser);
-    } else {
-      app.authReadyCallback = (user) => {
-        if (user && user.phone) {
-          this.handleUserLoaded(user);
-        } else {
-          this.setData({ showPhoneModal: true });
-        }
-      };
-    }
+      if (app.globalData && app.globalData.currentUser) {
+        this.handleUserLoaded(app.globalData.currentUser);
+      } else {
+        app.authReadyCallback = (user) => {
+          if (user && user.phone) {
+            this.handleUserLoaded(user);
+          } else {
+            this.setData({ showPhoneModal: true });
+          }
+        };
+      }
+    });
   },
 
   onReady() {
@@ -70,29 +78,83 @@ Page({
       if (!this.data.currentUser || this.data.currentUser.phone !== cachedUser.phone) {
         this.setData({ currentUser: cachedUser });
       }
+      this.updateUserVisibleCities();
       this.fetchOrders();
-      this.startUrgentCheckTimer();
     } else if (this.data.currentUser) {
+      this.updateUserVisibleCities();
       this.fetchOrders();
-      this.startUrgentCheckTimer();
     }
   },
 
-  onHide() {
-    this.stopUrgentCheckTimer();
-  },
-
-  onUnload() {
-    this.stopUrgentCheckTimer();
-  },
-
   onPullDownRefresh() {
-    this.fetchOrders().then(() => {
+    this.fetchCities().then(() => {
+      return this.fetchOrders();
+    }).finally(() => {
       wx.stopPullDownRefresh();
     });
   },
 
   stopBubble() {},
+
+  callPhone(e) {
+    const phone = e.currentTarget.dataset.phone;
+    if (phone) {
+      wx.makePhoneCall({ phoneNumber: phone });
+    }
+  },
+
+  fetchCities() {
+    const db = wx.cloud.database();
+    return db.collection('cities')
+      .where({ enabled: true })
+      .orderBy('sort', 'asc')
+      .get()
+      .then(res => {
+        let list = (res.data || []).map(item => item.name);
+        if (!list || list.length === 0) {
+          list = ['天津', '北京'];
+        }
+        if (app.globalData) app.globalData.availableCities = list;
+        wx.setStorageSync('availableCities', list);
+
+        const defaultCity = list[0] || '天津';
+        this.setData({
+          availableCities: list,
+          newUserCities: [defaultCity],
+          newUserCitiesMap: { [defaultCity]: true }
+        }, () => {
+          this.updateUserVisibleCities();
+        });
+      })
+      .catch(err => {
+        console.warn('拉取城市失败，使用兜底配置：', err);
+        const fallback = ['天津', '北京'];
+        if (app.globalData) app.globalData.availableCities = fallback;
+        this.setData({
+          availableCities: fallback,
+          newUserCities: ['天津'],
+          newUserCitiesMap: { '天津': true }
+        }, () => {
+          this.updateUserVisibleCities();
+        });
+      });
+  },
+
+  updateUserVisibleCities() {
+    const user = this.data.currentUser;
+    const all = this.data.availableCities;
+    if (!user) return;
+
+    if (user.role === 'admin') {
+      this.setData({ userVisibleCities: all });
+    } else if (user.role === 'service') {
+      const myCities = user.cities || [];
+      const visible = all.filter(c => myCities.includes(c));
+      this.setData({ userVisibleCities: visible.length > 0 ? visible : all });
+    } else {
+      this.setData({ userVisibleCities: [] });
+    }
+  },
 
   handleUserLoaded(user) {
     if (app.globalData) {
@@ -102,15 +164,20 @@ Page({
       currentUser: user,
       showPhoneModal: false
     }, () => {
+      this.updateUserVisibleCities();
       this.fetchOrders();
-      this.startUrgentCheckTimer();
     });
   },
 
-  // 点击头像卡片：测试账号与管理员自由换号，正式员工强锁定
+  onCityFilterChange(e) {
+    const city = e.currentTarget.dataset.city;
+    this.setData({ selectedCityFilter: city }, () => {
+      this.applyFilters();
+    });
+  },
+
   async handleUserHeaderTap() {
     const user = this.data.currentUser;
-
     if (!user) {
       this.setData({ showPhoneModal: true, inputPhone: '' });
       return;
@@ -124,7 +191,6 @@ Page({
       wx.hideLoading();
       const dbUser = res.data || user;
 
-      // 1. 如果是测试账号 (isTest === true) 或是管理员：允许自由退出换号
       if (dbUser.isTest === true || dbUser.role === 'admin') {
         wx.showModal({
           title: '退出 / 更换账号',
@@ -148,18 +214,16 @@ Page({
         return;
       }
 
-      // 2. 正式员工：已绑定微信则强锁定
       const hasBoundOpenid = dbUser.openid && dbUser.openid.trim() !== '';
       if (hasBoundOpenid) {
         return wx.showModal({
           title: '身份已绑定锁定',
-          content: `员工【${dbUser.name}】（${dbUser.phone}）已与当前微信号永久绑定，禁止切换。如需换号请联系管理员解绑。`,
+          content: `员工【${dbUser.name}】（${dbUser.phone}）已与当前微信号绑定，禁止切换。如需换号请联系管理员解绑。`,
           showCancel: false,
           confirmText: '我知道了'
         });
       }
 
-      // 3. 尚未绑定的正式员工：允许登录
       this.setData({ showPhoneModal: true, inputPhone: '' });
     } catch (e) {
       wx.hideLoading();
@@ -171,9 +235,8 @@ Page({
     this.setData({ inputPhone: (e.detail.value || '').trim() });
   },
 
-  // 手机号核验登录（通过云函数）
   async verifyAndBindPhone() {
-    const phone = this.data.inputPhone;
+    const phone = (this.data.inputPhone || '').trim();
     if (!phone || phone.length < 11) {
       return wx.showToast({ title: '请输入正确的11位手机号', icon: 'none' });
     }
@@ -225,24 +288,20 @@ Page({
 
       db.collection('orders').orderBy('createTime', 'desc').get().then(res => {
         const allOrders = res.data || [];
+        const userCities = user.cities || [];
 
-        let filteredByRole = allOrders;
-        if (user && user.role === 'worker') {
-          filteredByRole = allOrders.filter(o => o.workerName === user.name);
+        let roleFiltered = allOrders;
+        if (user.role === 'worker') {
+          roleFiltered = allOrders.filter(o => 
+            o.workerName === user.name && (!o.city || userCities.includes(o.city))
+          );
+        } else if (user.role === 'service') {
+          roleFiltered = allOrders.filter(o => 
+            !o.city || userCities.includes(o.city)
+          );
         }
 
-        const counts = {
-          all: filteredByRole.length,
-          '待派单': filteredByRole.filter(o => o.status === '待派单').length,
-          '已派单': filteredByRole.filter(o => o.status === '已派单').length,
-          '已完工': filteredByRole.filter(o => o.status === '已完工').length,
-          '未成单': filteredByRole.filter(o => o.status === '未成单').length
-        };
-
-        this.setData({
-          orders: filteredByRole,
-          statusCounts: counts
-        }, () => {
+        this.setData({ orders: roleFiltered }, () => {
           this.applyFilters();
           wx.hideNavigationBarLoading();
           resolve();
@@ -256,31 +315,41 @@ Page({
   },
 
   applyFilters() {
-    const { orders, currentTab, searchKey } = this.data;
+    const { orders, currentTab, searchKey, selectedCityFilter, currentUser } = this.data;
     let list = [...orders];
+
+    if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'service') && selectedCityFilter !== 'all') {
+      list = list.filter(o => o.city === selectedCityFilter);
+    }
+
+    const counts = {
+      all: list.length,
+      '待派单': list.filter(o => o.status === '待派单').length,
+      '已派单': list.filter(o => o.status === '已派单').length,
+      '已完工': list.filter(o => o.status === '已完工').length,
+      '未成单': list.filter(o => o.status === '未成单').length
+    };
 
     if (currentTab !== 'all') {
       list = list.filter(o => o.status === currentTab);
     }
 
-    if (searchKey.trim()) {
+    if (searchKey && searchKey.trim()) {
       const kw = searchKey.trim().toLowerCase();
       list = list.filter(o =>
-        ((o.customerPhone || o.phone || '').includes(kw)) ||
+        ((o.city || '').toLowerCase().includes(kw)) ||
+        ((o.customerPhone || '').includes(kw)) ||
         ((o.address || '').toLowerCase().includes(kw)) ||
         ((o.workerName || '').toLowerCase().includes(kw)) ||
-        ((o.appointmentTime || o.time || '').toLowerCase().includes(kw)) ||
+        ((o.appointmentTime || '').toLowerCase().includes(kw)) ||
         ((o.source || '').toLowerCase().includes(kw))
       );
     }
 
-    list.sort((a, b) => {
-      const aUrgent = (a.isUrgent && !a.urgentAccepted) ? 1 : 0;
-      const bUrgent = (b.isUrgent && !b.urgentAccepted) ? 1 : 0;
-      return bUrgent - aUrgent;
+    this.setData({
+      filteredOrders: list,
+      statusCounts: counts
     });
-
-    this.setData({ filteredOrders: list });
   },
 
   onTabChange(e) {
@@ -310,13 +379,17 @@ Page({
   },
 
   openUserManageModal() {
+    const defaultCity = this.data.availableCities[0] || '天津';
     this.setData({
       showUserManageModal: true,
       userManageTab: 'list',
       newUserName: '',
       newUserPhone: '',
       newUserRole: 'worker',
-      newUserIsTest: false
+      newUserIsTest: false,
+      newUserGroupId: '',
+      newUserCities: [defaultCity],
+      newUserCitiesMap: { [defaultCity]: true }
     });
     this.fetchAllUsers();
   },
@@ -329,10 +402,26 @@ Page({
     this.setData({ userManageTab: e.currentTarget.dataset.tab });
   },
 
+  // 🌟 核心：清洗 cities 格式，确保权限城市 100% 正确显示
   fetchAllUsers() {
     const db = wx.cloud.database();
     db.collection('users').get().then(res => {
-      this.setData({ allUserList: res.data || [] });
+      const list = (res.data || []).map(item => {
+        let citiesArr = [];
+        if (Array.isArray(item.cities)) {
+          citiesArr = item.cities;
+        } else if (item.cities && typeof item.cities === 'object') {
+          citiesArr = Object.values(item.cities);
+        } else if (typeof item.cities === 'string' && item.cities) {
+          citiesArr = [item.cities];
+        }
+        citiesArr = citiesArr.filter(c => c && typeof c === 'string');
+        return {
+          ...item,
+          citiesText: citiesArr.length > 0 ? citiesArr.join('、') : '未分配'
+        };
+      });
+      this.setData({ allUserList: list });
     }).catch(e => console.error(e));
   },
 
@@ -340,7 +429,7 @@ Page({
     const { id, name } = e.currentTarget.dataset;
     wx.showModal({
       title: '确认解绑微信号？',
-      content: `解绑后，该账号可重新绑定新微信号。`,
+      content: `解绑后，员工【${name}】的微信号将清空，可重新绑定新微信号。`,
       confirmColor: '#e53935',
       success: async (res) => {
         if (res.confirm) {
@@ -364,15 +453,29 @@ Page({
   },
 
   onNewUserNameInput(e) {
-    this.setData({ newUserName: e.detail.value.trim() });
+    this.setData({ newUserName: (e.detail.value || '').trim() });
   },
 
   onNewUserPhoneInput(e) {
-    this.setData({ newUserPhone: e.detail.value.trim() });
+    this.setData({ newUserPhone: (e.detail.value || '').trim() });
+  },
+
+  onNewUserGroupIdInput(e) {
+    this.setData({ newUserGroupId: (e.detail.value || '').trim() });
   },
 
   onNewUserRoleChange(e) {
     this.setData({ newUserRole: e.detail.value });
+  },
+
+  onNewUserCitiesChange(e) {
+    const selected = e.detail.value || [];
+    const map = {};
+    selected.forEach(c => { map[c] = true; });
+    this.setData({
+      newUserCities: selected,
+      newUserCitiesMap: map
+    });
   },
 
   onNewUserIsTestChange(e) {
@@ -380,101 +483,64 @@ Page({
   },
 
   async submitAddUser() {
-    const { newUserName, newUserPhone, newUserRole, newUserIsTest } = this.data;
-    if (!newUserName) return wx.showToast({ title: '请输入姓名', icon: 'none' });
-    if (!newUserPhone || newUserPhone.length < 11) return wx.showToast({ title: '请输入正确的11位手机号', icon: 'none' });
+    const name = (this.data.newUserName || '').trim();
+    const phone = (this.data.newUserPhone || '').trim();
+    const role = this.data.newUserRole || 'worker';
+    const cities = this.data.newUserCities || [];
+    const groupId = (this.data.newUserGroupId || '').trim();
+    const isTest = Boolean(this.data.newUserIsTest);
 
-    wx.showLoading({ title: '正在录入...' });
+    if (!name) return wx.showToast({ title: '请输入姓名', icon: 'none' });
+    if (!phone || phone.length !== 11) return wx.showToast({ title: '请输入11位手机号', icon: 'none' });
+    if (!cities || cities.length === 0) return wx.showToast({ title: '请至少分配一个城市', icon: 'none' });
+
+    wx.showLoading({ title: '正在校验手机号...' });
     const db = wx.cloud.database();
 
     try {
-      await db.collection('users').add({
-        data: {
-          name: newUserName,
-          phone: newUserPhone,
-          role: newUserRole,
-          isTest: newUserIsTest,
-          openid: '',
-          createTime: new Date().toISOString()
-        }
-      });
+      const checkRes = await db.collection('users').where({ phone: phone }).get();
+      if (checkRes.data && checkRes.data.length > 0) {
+        wx.hideLoading();
+        const existing = checkRes.data[0];
+        const existingRole = existing.role === 'admin' ? '管理员' : (existing.role === 'service' ? '客服' : '师傅');
+        return wx.showModal({
+          title: '手机号冲突',
+          content: `该手机号已被【${existing.name || '员工'}】（${existingRole}）占用！不可重复录入。`,
+          showCancel: false
+        });
+      }
+
+      const userData = {
+        name: name,
+        phone: phone,
+        role: role,
+        cities: cities,
+        groupId: role === 'worker' ? groupId : '',
+        isTest: isTest,
+        openid: '',
+        createTime: new Date().toISOString()
+      };
+
+      wx.showLoading({ title: '正在录入...' });
+      await db.collection('users').add({ data: userData });
       wx.hideLoading();
+      wx.showToast({ title: '录入成功', icon: 'success' });
+
+      const defaultCity = this.data.availableCities[0] || '天津';
       this.setData({
         newUserName: '',
         newUserPhone: '',
+        newUserGroupId: '',
+        newUserCities: [defaultCity],
+        newUserCitiesMap: { [defaultCity]: true },
         newUserIsTest: false,
         userManageTab: 'list'
       });
       this.fetchAllUsers();
-      wx.showToast({ title: '录入成功', icon: 'success' });
     } catch (err) {
-      console.error('添加失败：', err);
+      console.error(err);
       wx.hideLoading();
       wx.showToast({ title: '录入失败，请重试', icon: 'none' });
     }
-  },
-
-  startUrgentCheckTimer() {
-    this.stopUrgentCheckTimer();
-    const user = this.data.currentUser;
-    if (user && user.role === 'worker') {
-      this.checkWorkerUrgentOrders();
-      const timer = setInterval(() => {
-        this.checkWorkerUrgentOrders();
-      }, 60000);
-      this.setData({ urgentTimer: timer });
-    }
-  },
-
-  stopUrgentCheckTimer() {
-    if (this.data.urgentTimer) {
-      clearInterval(this.data.urgentTimer);
-      this.setData({ urgentTimer: null });
-    }
-  },
-
-  checkWorkerUrgentOrders() {
-    const user = this.data.currentUser;
-    if (!user || user.role !== 'worker') return;
-
-    const urgentOrder = (this.data.orders || []).find(o =>
-      o.workerName === user.name &&
-      o.isUrgent === true &&
-      o.urgentAccepted !== true &&
-      o.status !== '已完工' &&
-      o.status !== '未成单'
-    );
-
-    if (urgentOrder) {
-      wx.showModal({
-        title: '🚨 客户紧急催单提醒',
-        content: `您负责的工单（客户电话：${urgentOrder.customerPhone || urgentOrder.phone}，地址：${urgentOrder.address}）已被催单，请尽快处理！`,
-        confirmText: '接受（不提示）',
-        cancelText: '稍后',
-        success: (res) => {
-          if (res.confirm) {
-            this.acceptUrgentOrder(urgentOrder._id);
-          }
-        }
-      });
-    }
-  },
-
-  acceptUrgentOrder(orderId) {
-    wx.showLoading({ title: '正在确认...' });
-    const db = wx.cloud.database();
-    db.collection('orders').doc(orderId).update({
-      data: {
-        urgentAccepted: true,
-        isUrgent: false
-      }
-    }).then(() => {
-      wx.hideLoading();
-      wx.showToast({ title: '已确认接受', icon: 'success' });
-      this.fetchOrders();
-    }).catch(err => {
-      console.error(err);
-      wx.hideLoading();
-    });
   }
 });

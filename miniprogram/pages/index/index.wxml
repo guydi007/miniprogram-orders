@@ -9,9 +9,14 @@
           <text class="role-badge role-{{ currentUser.role || 'unbound' }}">
             {{ currentUser.role === 'admin' ? '管理员' : (currentUser.role === 'service' ? '客服' : (currentUser.role === 'worker' ? '师傅' : '待核验')) }}
           </text>
-          <text class="role-badge test-badge" wx:if="{{ currentUser.isTest }}">🧪 测试号</text>
+          <text class="test-icon-badge" wx:if="{{ currentUser.isTest }}">🧪</text>
         </view>
-        <text class="user-phone">{{ currentUser.phone ? '📱 ' + currentUser.phone : '点此绑定手机号' }}</text>
+        <view class="sub-info-row">
+          <text class="user-phone">{{ currentUser.phone || '点此绑定手机号' }}</text>
+          <text class="city-tag" wx:if="{{ currentUser && currentUser.cities && currentUser.cities.length }}">
+            {{ currentUser.cities.join('/') }}
+          </text>
+        </view>
       </view>
     </view>
 
@@ -41,7 +46,29 @@
     </view>
   </view>
 
-  <!-- 2. 工单状态分类 Tab 与数量统计 -->
+  <!-- 2. 城市过滤筛选栏 -->
+  <view class="admin-city-bar" wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === 'service') && userVisibleCities.length > 0 }}">
+    <scroll-view scroll-x class="city-scroll" enable-flex>
+      <view 
+        class="city-chip {{ selectedCityFilter === 'all' ? 'city-chip-active' : '' }}" 
+        bindtap="onCityFilterChange" 
+        data-city="all"
+      >
+        全部城市
+      </view>
+      <view 
+        class="city-chip {{ selectedCityFilter === item ? 'city-chip-active' : '' }}" 
+        wx:for="{{ userVisibleCities }}" 
+        wx:key="*this" 
+        bindtap="onCityFilterChange" 
+        data-city="{{ item }}"
+      >
+        {{ item }}
+      </view>
+    </scroll-view>
+  </view>
+
+  <!-- 3. 工单状态分类 Tab 与数量统计 -->
   <view class="status-tab-bar">
     <view 
       class="tab-item {{ currentTab === item.key ? 'tab-item-active' : '' }}" 
@@ -56,17 +83,17 @@
     </view>
   </view>
 
-  <!-- 3. 检索区域 -->
+  <!-- 4. 检索区域 -->
   <view class="search-bar">
     <input 
       class="search-input" 
-      placeholder="🔍 搜索电话 / 地址 / 师傅姓名 / 时间" 
+      placeholder="🔍 搜索城市 / 电话 / 地址 / 师傅姓名" 
       value="{{ searchKey }}" 
       bindinput="onSearchInput" 
     />
   </view>
 
-  <!-- 4. 订单列表 -->
+  <!-- 5. 订单列表 -->
   <view class="order-list">
     <view 
       class="order-card" 
@@ -76,42 +103,56 @@
       data-id="{{ item._id }}"
     >
       <view class="card-top">
-        <text class="time">📅 {{ item.appointmentTime || item.time || '待定' }}</text>
+        <view class="top-left">
+          <text class="city-badge" wx:if="{{ item.city }}">{{ item.city }}</text>
+          <text class="time">📅 {{ item.appointmentTime || '待定' }}</text>
+        </view>
         <text class="status-tag {{ item.status === '待派单' ? 'status-pending' : (item.status === '已派单' ? 'status-assigned' : (item.status === '未成单' ? 'status-fail' : 'status-done')) }}">{{ item.status }}</text>
       </view>
 
       <view class="card-body">
+        <!-- 客户电话：纯文本展示，取消点击拨号，严格居中水平对齐 -->
         <view class="row">
           <text class="item-label">客户电话：</text>
-          <text class="item-val phone">{{ item.customerPhone || item.phone || '-' }}</text>
+          <text class="item-val font-number">{{ item.customerPhone || '-' }}</text>
         </view>
         <view class="row">
           <text class="item-label">服务地址：</text>
-          <text class="item-val">{{ item.address || '-' }}</text>
+          <text class="item-val">{{ item.address ? '📍 ' + item.address : '-' }}</text>
         </view>
         <view class="row">
           <text class="item-label">指派师傅：</text>
           <text class="item-val highlight">{{ item.workerName || '未指派' }}</text>
         </view>
-        <view class="row" wx:if="{{ item.source }}">
-          <text class="item-label">订单来源：</text>
-          <text class="item-val">{{ item.source }}</text>
+        <view class="row" wx:if="{{ item.companionWorkers }}">
+          <text class="item-label">同行人员：</text>
+          <text class="item-val">{{ item.companionWorkers }}</text>
+        </view>
+        <!-- 预付款模式展示 -->
+        <view class="row" wx:if="{{ item.settleType === '预付款' }}">
+          <text class="item-label">预付收款：</text>
+          <text class="item-val amount-val">定金合计 ¥{{ item.depositAmount || item.finalAmount }}（待收尾款 ¥{{ item.remainingAmount || 0 }}）</text>
+        </view>
+        <!-- 全款完工模式展示 -->
+        <view class="row" wx:elif="{{ item.finalAmount }}">
+          <text class="item-label">实收合计：</text>
+          <text class="item-val amount-val">¥{{ item.finalAmount }}</text>
         </view>
       </view>
 
       <view class="card-footer">
-        <text class="feedback-count">💬 处理反馈 ({{ item.feedbacks ? item.feedbacks.length : 0 }})</text>
+        <text class="feedback-count">💬 回馈 ({{ item.feedbacks ? item.feedbacks.length : 0 }}) · 流水 ({{ item.paymentLogs ? item.paymentLogs.length : (item.finishPhotos ? item.finishPhotos.length : 0) }})</text>
         <text class="arrow">详情 ➔</text>
       </view>
     </view>
 
     <!-- 空数据提示 -->
     <view class="empty-state" wx:if="{{ filteredOrders.length === 0 }}">
-      <text>{{ !currentUser ? '请先绑定手机号以查看工单' : '当前分类下暂无工单' }}</text>
+      <text>{{ !currentUser ? '请先绑定手机号以查看工单' : '当前城市或分类下暂无工单' }}</text>
     </view>
   </view>
 
-  <!-- 首次使用：手机号核验绑定弹窗 -->
+  <!-- 手机号核验登录弹窗 -->
   <view class="modal-mask" wx:if="{{ showPhoneModal }}">
     <view class="modal-box">
       <view class="modal-title">🔐 员工身份核验</view>
@@ -138,16 +179,18 @@
         <view class="type-btn {{ userManageTab === 'add' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="add">➕ 新增员工</view>
       </view>
 
-      <!-- 选项卡 1：员工列表与解绑 -->
+      <!-- 选项卡 1：员工列表 -->
       <view class="user-list-box" wx:if="{{ userManageTab === 'list' }}">
         <view class="user-manage-item" wx:for="{{ allUserList }}" wx:key="_id">
           <view class="u-info">
             <view class="u-name-line">
-              <text class="u-name">{{ item.name }}</text>
+              <text class="u-name">{{ item.name || '未填姓名' }}</text>
               <text class="u-badge">{{ item.role === 'admin' ? '管理员' : (item.role === 'service' ? '客服' : '师傅') }}</text>
-              <text class="u-badge test-badge" wx:if="{{ item.isTest }}">🧪 测试号</text>
+              <text class="test-icon-badge" wx:if="{{ item.isTest }}">🧪</text>
             </view>
-            <text class="u-phone">📱 {{ item.phone }}</text>
+            <text class="u-phone">{{ item.phone || '无电话' }}</text>
+            <text class="u-sub">权限城市：{{ item.citiesText }}</text>
+            <text class="u-sub" wx:if="{{ item.role === 'worker' && item.groupId }}">📢 关联群号：{{ item.groupId }}</text>
             <text class="u-status {{ item.isTest ? 'test-status' : (item.openid ? 'bound' : 'unbound') }}">
               {{ item.isTest ? '⚡ 免锁账号（可自由切换）' : (item.openid ? '🟢 已绑定微信号' : '⚪ 待首次登录绑定') }}
             </text>
@@ -171,18 +214,20 @@
 
       <!-- 选项卡 2：录入新员工 -->
       <view class="user-add-box" wx:if="{{ userManageTab === 'add' }}">
+        <text class="field-title">员工姓名：</text>
         <input 
-          class="modal-input mt-20" 
-          placeholder="员工姓名（如：赵师傅）" 
+          class="modal-input" 
+          placeholder="如：赵师傅、李客服" 
           value="{{ newUserName }}" 
           bindinput="onNewUserNameInput" 
         />
 
+        <text class="field-title mt-20">员工手机号（登录唯一凭据）：</text>
         <input 
-          class="modal-input mt-20" 
+          class="modal-input" 
           type="number" 
           maxlength="11" 
-          placeholder="员工手机号（用于登录核验）" 
+          placeholder="请输入11位手机号" 
           value="{{ newUserPhone }}" 
           bindinput="onNewUserPhoneInput" 
         />
@@ -196,7 +241,25 @@
           </radio-group>
         </view>
 
-        <!-- 方案 1：测试账号勾选开关 -->
+        <view class="city-select-box mt-20">
+          <text class="field-title">所属/管辖城市（支持多选）：</text>
+          <checkbox-group class="city-checkbox-group" bindchange="onNewUserCitiesChange">
+            <label class="checkbox-item" wx:for="{{ availableCities }}" wx:key="*this">
+              <checkbox value="{{ item }}" checked="{{ newUserCitiesMap[item] }}" /> {{ item }}
+            </label>
+          </checkbox-group>
+        </view>
+
+        <view class="mt-20" wx:if="{{ newUserRole === 'worker' }}">
+          <text class="field-title">专属工作群号 / 群标识：</text>
+          <input 
+            class="modal-input" 
+            placeholder="如：TJ-01、BJ-01（无群可留空）" 
+            value="{{ newUserGroupId }}" 
+            bindinput="onNewUserGroupIdInput" 
+          />
+        </view>
+
         <view class="test-switch-row mt-20">
           <text class="test-switch-label">🧪 设为免锁测试号：</text>
           <switch checked="{{ newUserIsTest }}" color="#07c160" bindchange="onNewUserIsTestChange" />

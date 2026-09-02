@@ -1,78 +1,84 @@
 <view class="container">
-  <view class="card">
-    <view class="form-title">新建派单</view>
+  <view class="form-card">
+    <view class="form-title">📝 新建工单</view>
 
-    <!-- 预约时间（支持智能补全） -->
-    <view class="form-group">
-      <view class="label-row">
-        <text class="label">预约时间 <text class="req">*</text></text>
-        <text class="helper-text">支持快捷选择时段</text>
-      </view>
-      <input 
-        class="input" 
-        placeholder="例如：今天 下午 或 2026-08-30 下午" 
-        value="{{ appointmentTime }}" 
-        bindinput="onAppointmentTimeInput" 
-        bindblur="onAppointmentTimeBlur" 
-      />
-      
-      <!-- 快捷时段标签 -->
-      <view class="quick-tags">
-        <text class="tag" bindtap="setQuickTime" data-val="今天 早上">今天 早上</text>
-        <text class="tag" bindtap="setQuickTime" data-val="今天 上午">今天 上午</text>
-        <text class="tag" bindtap="setQuickTime" data-val="今天 下午">今天 下午</text>
-        <text class="tag" bindtap="setQuickTime" data-val="明天 早上">明天 早上</text>
-        <text class="tag" bindtap="setQuickTime" data-val="明天 上午">明天 上午</text>
-        <text class="tag" bindtap="setQuickTime" data-val="明天 下午">明天 下午</text>
-      </view>
-    </view>
-
-    <!-- 客户电话 -->
-    <view class="form-group">
-      <text class="label">客户电话 <text class="req">*</text></text>
+    <!-- 1. 客户电话 -->
+    <view class="form-item">
+      <text class="label required">客户电话</text>
       <input 
         class="input" 
         type="number" 
         maxlength="11" 
-        placeholder="请输入客户11位手机号" 
+        placeholder="请输入11位手机号" 
         value="{{ customerPhone }}" 
         bindinput="onPhoneInput" 
       />
     </view>
 
-    <!-- 服务地址 -->
-    <view class="form-group">
-      <text class="label">服务地址 <text class="req">*</text></text>
-      <input 
-        class="input" 
-        placeholder="请输入详细地址（小区/门牌号）" 
-        value="{{ address }}" 
-        bindinput="onAddressInput" 
-      />
+    <!-- 2. 服务地址（左侧内嵌城市下拉，右侧详细地址，维持原版紧凑单行） -->
+    <view class="form-item">
+      <text class="label required">服务地址</text>
+      <view class="address-input-group">
+        <picker class="city-inline-picker" bindchange="onCityChange" value="{{ cityIndex }}" range="{{ permittedCities }}">
+          <view class="city-inline-btn">
+            {{ permittedCities[cityIndex] || '城市' }} ▾
+          </view>
+        </picker>
+        <input 
+          class="address-inline-input" 
+          placeholder="街道、小区、楼栋及门牌号" 
+          value="{{ address }}" 
+          bindinput="onAddressInput" 
+        />
+      </view>
     </view>
 
-    <!-- 订单来源 -->
-    <view class="form-group">
-      <text class="label">订单来源</text>
+    <!-- 3. 预约上门时间（文本框 + 快捷胶囊 + 自动转换） -->
+    <view class="form-item">
+      <text class="label required">预约上门时间</text>
       <input 
         class="input" 
-        placeholder="例如：美团 / 电话咨询 / 熟人介绍 / 悦乐居" 
+        placeholder="如：9/2 上午（支持输入今天下午/明天等）" 
+        value="{{ appointmentTime }}" 
+        bindinput="onTimeInput" 
+        bindblur="onTimeBlur"
+      />
+      <!-- 一键快捷填入胶囊 -->
+      <view class="quick-time-grid">
+        <view class="quick-tag" bindtap="onQuickTime" data-val="当天 早上">当天早上</view>
+        <view class="quick-tag" bindtap="onQuickTime" data-val="当天 上午">当天上午</view>
+        <view class="quick-tag" bindtap="onQuickTime" data-val="当天 下午">当天下午</view>
+        <view class="quick-tag" bindtap="onQuickTime" data-val="当天 晚上">当天晚上</view>
+        <view class="quick-tag" bindtap="onQuickTime" data-val="明天 早上">明天早上</view>
+        <view class="quick-tag" bindtap="onQuickTime" data-val="明天 上午">明天上午</view>
+        <view class="quick-tag" bindtap="onQuickTime" data-val="明天 下午">明天下午</view>
+        <view class="quick-tag" bindtap="onQuickTime" data-val="明天 晚上">明天晚上</view>
+      </view>
+    </view>
+
+<!-- 仅管理员可见：指派师傅（客服彻底隐藏） -->
+<view class="form-item" wx:if="{{ currentUser && currentUser.role === 'admin' }}">
+  <text class="form-label">指派师傅：</text>
+  <picker bindchange="onWorkerChange" value="{{ workerIndex }}" range="{{ workerNames }}">
+    <view class="picker-inner">
+      <text class="picker-text">{{ workerNames[workerIndex] || '暂不指派' }}</text>
+      <text class="group-badge" wx:if="{{ currentWorkerGroup }}">群：{{ currentWorkerGroup }}</text>
+      <text class="arrow-down">▼</text>
+    </view>
+  </picker>
+</view>
+
+    <!-- 5. 渠道来源 -->
+    <view class="form-item">
+      <text class="label">渠道来源</text>
+      <input 
+        class="input" 
+        placeholder="如：美团、58同城、老客户转介绍" 
         value="{{ source }}" 
         bindinput="onSourceInput" 
       />
     </view>
 
-    <!-- 订单备注 -->
-    <view class="form-group">
-      <text class="label">订单备注</text>
-      <textarea 
-        class="textarea" 
-        placeholder="填写客户需求细节、注意事项等..." 
-        value="{{ remark }}" 
-        bindinput="onRemarkInput" 
-      />
-    </view>
-
-    <button class="btn-submit" bindtap="submitOrder">确认创建工单</button>
+    <button class="btn-submit" bindtap="submitOrder">立即录入并派单</button>
   </view>
 </view>
