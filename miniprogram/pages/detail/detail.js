@@ -13,6 +13,27 @@ function formatDateTime(dateVal) {
   return `${y}-${m}-${day} ${h}:${min}`;
 }
 
+function parseDateSmart(text) {
+  if (!text) return '';
+  let str = text.trim();
+
+  const now = new Date();
+  const getFormat = (offsetDays) => {
+    const d = new Date(now.getTime() + offsetDays * 86400000);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const today = getFormat(0);
+  const tomorrow = getFormat(1);
+
+  str = str.replace(/(今天|当天|今日)\s*/g, `${today} `);
+  str = str.replace(/(明天|次日)\s*/g, `${tomorrow} `);
+  return str.replace(/\s+/g, ' ').trim();
+}
+
 Page({
   data: {
     orderId: '',
@@ -22,10 +43,18 @@ Page({
     candidateWorkers: [],
     candidateWorkerNames: [],
 
-    // 结单/修改弹窗
+    // 修改预约时间
+    showEditTimeModal: false,
+    editTimeInput: '',
+
+    // 取消工单
+    showCancelModal: false,
+    cancelReason: '',
+
+    // 结单/预付弹窗
     showFinishModal: false,
-    settleMode: 'full', // 'full' | 'prepay'
-    initialSnapshot: null, // 初始快照，用于变更检测
+    settleMode: 'full',
+    initialSnapshot: null,
 
     inputCash: '',
     inputWechat: '',
@@ -72,6 +101,9 @@ Page({
       if (order.finishTime) {
         order.finishTimeFormatted = formatDateTime(order.finishTime);
       }
+      if (order.cancelTime) {
+        order.cancelTimeFormatted = formatDateTime(order.cancelTime);
+      }
       if (Array.isArray(order.paymentLogs)) {
         order.paymentLogs = order.paymentLogs.map(item => ({
           ...item,
@@ -80,6 +112,12 @@ Page({
       }
       if (Array.isArray(order.feedbacks)) {
         order.feedbacks = order.feedbacks.map(item => ({
+          ...item,
+          timeFormatted: formatDateTime(item.time)
+        }));
+      }
+      if (Array.isArray(order.appointmentLogs)) {
+        order.appointmentLogs = order.appointmentLogs.map(item => ({
           ...item,
           timeFormatted: formatDateTime(item.time)
         }));
@@ -166,7 +204,160 @@ Page({
     });
   },
 
-  // 🌟 修复未成单：严密捕获与反馈
+  // 🌟 修改预约时间方法
+  openEditTimeModal() {
+    this.setData({
+      showEditTimeModal: true,
+      editTimeInput: this.data.order.appointmentTime || ''
+    });
+  },
+
+  closeEditTimeModal() {
+    this.setData({ showEditTimeModal: false });
+  },
+
+  onEditTimeInput(e) {
+    this.setData({ editTimeInput: e.detail.value });
+  },
+
+  onEditTimeBlur(e) {
+    const formatted = parseDateSmart(e.detail.value);
+    this.setData({ editTimeInput: formatted });
+  },
+
+  onQuickEditTime(e) {
+    const raw = e.currentTarget.dataset.val;
+    const formatted = parseDateSmart(raw);
+    this.setData({ editTimeInput: formatted });
+  },
+
+  async submitEditTime() {
+    const newTime = parseDateSmart(this.data.editTimeInput);
+    const oldTime = this.data.order.appointmentTime || '';
+
+    if (!newTime) {
+      return wx.showToast({ title: '请输入预约时间', icon: 'none' });
+    }
+
+    if (newTime === oldTime) {
+      this.setData({ showEditTimeModal: false });
+      return wx.showToast({ title: '时间未做修改', icon: 'none' });
+    }
+
+    wx.showLoading({ title: '正在保存改期...' });
+    const now = new Date();
+    const currentUser = this.data.currentUser;
+
+    const newLog = {
+      id: 'time_' + Date.now(),
+      oldTime: oldTime,
+      newTime: newTime,
+      operatorName: (currentUser && currentUser.name) || '员工',
+      operatorRole: (currentUser && currentUser.role) || 'service',
+      time: now.toISOString(),
+      timeFormatted: formatDateTime(now)
+    };
+
+    const existingLogs = Array.isArray(this.data.order.appointmentLogs) ? this.data.order.appointmentLogs : [];
+    const updatedLogs = [newLog, ...existingLogs];
+
+    // 同步把改期记录写入一条回馈，方便现场人员查阅
+    const changeFeedback = {
+      id: 'fb_' + Date.now(),
+      time: now.toISOString(),
+      timeFormatted: formatDateTime(now),
+      operatorName: (currentUser && currentUser.name) || '员工',
+      operatorRole: (currentUser && currentUser.role) || 'service',
+      content: `[预约改期] 预约时间由【${oldTime}】更改为【${newTime}】`,
+      photos: []
+    };
+    const existingFeedbacks = Array.isArray(this.data.order.feedbacks) ? this.data.order.feedbacks : [];
+    const updatedFeedbacks = [changeFeedback, ...existingFeedbacks];
+
+    const db = wx.cloud.database();
+    try {
+      await db.collection('orders').doc(this.data.orderId).update({
+        data: {
+          appointmentTime: newTime,
+          appointmentLogs: updatedLogs,
+          feedbacks: updatedFeedbacks
+        }
+      });
+
+      wx.hideLoading();
+      this.setData({ showEditTimeModal: false });
+      wx.showToast({ title: '改期成功！', icon: 'success' });
+      this.fetchOrderDetail(this.data.orderId);
+    } catch (err) {
+      wx.hideLoading();
+      console.error(err);
+      wx.showToast({ title: '改期失败，请重试', icon: 'none' });
+    }
+  },
+
+  // 🌟 取消工单（状态归类为未成单）
+  openCancelModal() {
+    this.setData({
+      showCancelModal: true,
+      cancelReason: ''
+    });
+  },
+
+  closeCancelModal() {
+    this.setData({ showCancelModal: false });
+  },
+
+  onCancelReasonInput(e) {
+    this.setData({ cancelReason: e.detail.value.trim() });
+  },
+
+  async submitCancelOrder() {
+    const reason = this.data.cancelReason;
+    if (!reason) {
+      return wx.showToast({ title: '请填写取消原因', icon: 'none' });
+    }
+
+    wx.showLoading({ title: '正在取消工单...' });
+    const now = new Date();
+    const currentUser = this.data.currentUser;
+
+    const cancelFeedback = {
+      id: 'fb_' + Date.now(),
+      time: now.toISOString(),
+      timeFormatted: formatDateTime(now),
+      operatorName: (currentUser && currentUser.name) || '员工',
+      operatorRole: (currentUser && currentUser.role) || 'service',
+      content: `[工单取消] 理由：${reason}`,
+      photos: []
+    };
+
+    const existingFeedbacks = Array.isArray(this.data.order.feedbacks) ? this.data.order.feedbacks : [];
+    const updatedFeedbacks = [cancelFeedback, ...existingFeedbacks];
+
+    const db = wx.cloud.database();
+    try {
+      await db.collection('orders').doc(this.data.orderId).update({
+        data: {
+          status: '未成单', // 🌟 归类为未成单
+          cancelReason: reason,
+          cancelOperator: (currentUser && currentUser.name) || '员工',
+          cancelTime: now.toISOString(),
+          feedbacks: updatedFeedbacks
+        }
+      });
+
+      wx.hideLoading();
+      this.setData({ showCancelModal: false });
+      wx.showToast({ title: '工单已取消并归档', icon: 'success' });
+      this.fetchOrderDetail(this.data.orderId);
+    } catch (err) {
+      wx.hideLoading();
+      console.error(err);
+      wx.showToast({ title: '取消失败，请重试', icon: 'none' });
+    }
+  },
+
+  // 师傅直接标记未成单
   markFail() {
     wx.showModal({
       title: '确认标为未成单？',
@@ -186,11 +377,7 @@ Page({
           } catch (err) {
             wx.hideLoading();
             console.error('更新未成单失败：', err);
-            wx.showModal({
-              title: '操作失败',
-              content: '更新失败，请检查数据库权限设置是否已放开读写。',
-              showCancel: false
-            });
+            wx.showToast({ title: '操作失败', icon: 'none' });
           }
         }
       }
@@ -237,7 +424,6 @@ Page({
     this.setData({ modalNote: e.detail.value.trim() });
   },
 
-  // 记录初始快照（用于比对是否发生更改）
   openFinishModal() {
     const o = this.data.order || {};
     const cash = o.cashAmount ? String(o.cashAmount) : '';
@@ -329,7 +515,6 @@ Page({
     });
   },
 
-  // 🌟 核心技能：智能变更检测（无改动不保存）
   async submitFinishOrder() {
     const { settleMode, inputCash, inputWechat, inputAlipay, inputTotalAmount, fullTotal, depositTotal, remainTotal, modalCompanions, modalNote, localPhotos, orderId, order, currentUser, initialSnapshot } = this.data;
 
@@ -352,7 +537,6 @@ Page({
       }
     }
 
-    // 智能比对：如果已有单子且未做任何金额、人员、备注变更，也没有新拍照，则直接拦截
     if (order && (order.settleType === (settleMode === 'full' ? '全款' : '预付款'))) {
       const snap = initialSnapshot || {};
       const isNoChange = (
@@ -452,7 +636,6 @@ Page({
     }
   },
 
-  // 🌟 进度回馈功能
   openFeedbackModal() {
     this.setData({
       showFeedbackModal: true,

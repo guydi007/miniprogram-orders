@@ -7,7 +7,7 @@
     </view>
     <view class="urgent-banner" wx:if="{{ order.isUrgent }}">🚨 客户已催单！请优先处理</view>
     
-    <!-- 预付款模式总览展示 -->
+    <!-- 预付款模式总览 -->
     <view class="amount-banner prepay-banner" wx:if="{{ order.settleType === '预付款' }}">
       <view class="banner-title">📑 工程总计：¥{{ order.totalAmount || 0 }}</view>
       <view class="banner-sub">
@@ -18,7 +18,7 @@
       </view>
     </view>
 
-    <!-- 全款完工模式总览展示 -->
+    <!-- 全款完工模式总览 -->
     <view class="amount-banner" wx:elif="{{ order.status === '已完工' && (order.finalAmount || order.totalAmount) }}">
       <view class="banner-title">💰 实收合计金额：¥{{ order.finalAmount || 0 }}</view>
       <view class="banner-split" wx:if="{{ order.wechatAmount || order.alipayAmount || order.cashAmount }}">
@@ -38,10 +38,32 @@
       <text class="info-label">服务地址：</text>
       <text class="info-val">{{ order.address ? '📍 ' + order.address : '-' }}</text>
     </view>
+
+    <!-- 🌟 预约时间（支持客服/管理员在线改期） -->
     <view class="info-row">
       <text class="info-label">预约时间：</text>
-      <text class="info-val highlight">{{ order.appointmentTime }}</text>
+      <view class="time-row-val">
+        <text class="info-val highlight">{{ order.appointmentTime }}</text>
+        <view 
+          class="btn-edit-time" 
+          wx:if="{{ (currentUser.role === 'admin' || currentUser.role === 'service') && order.status !== '已完工' && order.status !== '未成单' }}" 
+          bindtap="openEditTimeModal"
+        >
+          <text class="edit-icon">✏️</text>
+          <text class="edit-text">改期</text>
+        </view>
+      </view>
     </view>
+
+    <!-- 🌟 预约时间改期留痕展示 -->
+    <view class="time-logs-box" wx:if="{{ order.appointmentLogs && order.appointmentLogs.length }}">
+      <view class="time-log-item" wx:for="{{ order.appointmentLogs }}" wx:key="id">
+        <text class="time-log-tag">改期</text>
+        <text class="time-log-desc">{{ item.oldTime }} ➔ {{ item.newTime }}</text>
+        <text class="time-log-meta">({{ item.operatorName }} {{ item.timeFormatted }})</text>
+      </view>
+    </view>
+
     <view class="info-row">
       <text class="info-label">主派师傅：</text>
       <text class="info-val highlight">{{ order.workerName || '未指派' }}</text>
@@ -58,19 +80,22 @@
       <text class="info-label">订单来源：</text>
       <text class="info-val">{{ order.source }}</text>
     </view>
-    <!-- 🌟 展示录单人信息 -->
     <view class="info-row" wx:if="{{ order.creatorName }}">
       <text class="info-label">录单人：</text>
       <text class="info-val">{{ order.creatorName }}</text>
     </view>
-    <!-- 准确格式化的结算时间 -->
     <view class="info-row" wx:if="{{ order.finishTime }}">
       <text class="info-label">{{ order.settleType === '预付款' ? '最新收款时间：' : '结算时间：' }}</text>
       <text class="info-val">{{ order.finishTimeFormatted || order.finishTime }}</text>
     </view>
+    <!-- 取消理由说明展示 -->
+    <view class="info-row cancel-row" wx:if="{{ order.cancelReason }}">
+      <text class="info-label font-red">取消原因：</text>
+      <text class="info-val font-red">{{ order.cancelReason }}（{{ order.cancelOperator || '管理' }} {{ order.cancelTimeFormatted || '' }}）</text>
+    </view>
   </view>
 
-  <!-- 3. 最新施工凭证照片 -->
+  <!-- 3. 最新施工凭据照片 -->
   <view class="detail-card" wx:if="{{ order.finishPhotos && order.finishPhotos.length }}">
     <view class="section-title">📸 最新完工凭据照片</view>
     <view class="photo-grid">
@@ -90,7 +115,7 @@
     </view>
   </view>
 
-  <!-- 4. 操作按钮栏（位于流水与回馈上方，层级清晰） -->
+  <!-- 4. 操作按钮栏 -->
   <view class="actions-bar">
     <!-- 仅客服可见：催单 -->
     <button 
@@ -113,16 +138,25 @@
       </button>
     </picker>
 
-    <!-- 🌟 恢复：工单进度回馈按钮（未成单外均可回馈） -->
+    <!-- 进度回馈按钮 -->
     <button 
       class="btn-action btn-feedback" 
       wx:if="{{ order.status !== '未成单' }}" 
       bindtap="openFeedbackModal"
     >
-      💬 进度回馈
+      💬 回馈
     </button>
 
-    <!-- 仅师傅可见：未成单 -->
+    <!-- 🌟 客服与管理员专属：取消工单（状态归类为未成单） -->
+    <button 
+      class="btn-action btn-cancel" 
+      wx:if="{{ (currentUser.role === 'admin' || currentUser.role === 'service') && order.status !== '已完工' && order.status !== '未成单' }}" 
+      bindtap="openCancelModal"
+    >
+      ❌ 取消工单
+    </button>
+
+    <!-- 师傅专属：未成单 -->
     <button 
       class="btn-action btn-fail" 
       wx:if="{{ currentUser && currentUser.role === 'worker' && order.status !== '未成单' && order.status !== '已完工' }}" 
@@ -131,7 +165,7 @@
       未成单
     </button>
 
-    <!-- 仅师傅可见：预付单（二选一互斥） -->
+    <!-- 师傅专属：预付单（二选一互斥） -->
     <button 
       class="btn-action btn-prepay" 
       wx:if="{{ currentUser && currentUser.role === 'worker' && order.status !== '未成单' && (!order.settleType || order.settleType === '预付款') }}" 
@@ -140,7 +174,7 @@
       {{ order.settleType === '预付款' ? (order.remainingAmount > 0 ? '续收/结清尾款' : '修改预付单') : '预付单' }}
     </button>
 
-    <!-- 仅师傅可见：全款结单（二选一互斥） -->
+    <!-- 师傅专属：全款结单（二选一互斥） -->
     <button 
       class="btn-action btn-done" 
       wx:if="{{ currentUser && currentUser.role === 'worker' && order.status !== '未成单' && (!order.settleType || order.settleType === '全款') }}" 
@@ -150,7 +184,7 @@
     </button>
   </view>
 
-  <!-- 5. 🌟 恢复：施工与进度回馈记录流 -->
+  <!-- 5. 施工与进度回馈记录流 -->
   <view class="detail-card" wx:if="{{ order.feedbacks && order.feedbacks.length }}">
     <view class="section-title">💬 施工与进度回馈 ({{ order.feedbacks.length }})</view>
     <view class="log-timeline">
@@ -230,7 +264,61 @@
     </view>
   </view>
 
-  <!-- 7. 进度回馈录入弹窗 -->
+  <!-- 7. 🌟 弹窗：修改预约时间 -->
+  <view class="modal-mask" wx:if="{{ showEditTimeModal }}">
+    <view class="modal-box">
+      <view class="modal-title">📅 修改预约上门时间</view>
+      
+      <view class="field-item">
+        <text class="field-label required">预约时间：</text>
+        <input 
+          class="modal-input" 
+          placeholder="如：2026-09-03 上午" 
+          value="{{ editTimeInput }}" 
+          bindinput="onEditTimeInput" 
+          bindblur="onEditTimeBlur"
+        />
+      </view>
+
+      <!-- 快捷输入胶囊 -->
+      <view class="quick-time-grid mt-20">
+        <view class="quick-pill" bindtap="onQuickEditTime" data-val="今天 上午">今天 上午</view>
+        <view class="quick-pill" bindtap="onQuickEditTime" data-val="今天 下午">今天 下午</view>
+        <view class="quick-pill" bindtap="onQuickEditTime" data-val="明天 上午">明天 上午</view>
+        <view class="quick-pill" bindtap="onQuickEditTime" data-val="明天 下午">明天 下午</view>
+      </view>
+
+      <view class="modal-btns mt-30">
+        <button class="modal-btn cancel" bindtap="closeEditTimeModal">取消</button>
+        <button class="modal-btn confirm" bindtap="submitEditTime">保存改期</button>
+      </view>
+    </view>
+  </view>
+
+  <!-- 8. 🌟 弹窗：取消工单（必填取消理由） -->
+  <view class="modal-mask" wx:if="{{ showCancelModal }}">
+    <view class="modal-box">
+      <view class="modal-title font-red">❌ 取消工单确认</view>
+      <view class="cancel-tips">取消后工单将自动归类到【未成单】归档，请务必填写取消原因：</view>
+      
+      <view class="field-item mt-10">
+        <text class="field-label required">取消理由：</text>
+        <textarea 
+          class="modal-textarea" 
+          placeholder="如：客户临时不需要维修、重复下单、电话无法接通等..." 
+          value="{{ cancelReason }}" 
+          bindinput="onCancelReasonInput" 
+        />
+      </view>
+
+      <view class="modal-btns mt-30">
+        <button class="modal-btn cancel" bindtap="closeCancelModal">再想想</button>
+        <button class="modal-btn btn-danger" bindtap="submitCancelOrder">确认取消</button>
+      </view>
+    </view>
+  </view>
+
+  <!-- 9. 弹窗：进度回馈录入 -->
   <view class="modal-mask" wx:if="{{ showFeedbackModal }}">
     <view class="modal-box">
       <view class="modal-title">💬 提交施工与进度回馈</view>
@@ -266,7 +354,7 @@
     </view>
   </view>
 
-  <!-- 8. 专属弹窗：全款完工结单录入/修改 -->
+  <!-- 10. 弹窗：全款完工结单录入/修改 -->
   <view class="modal-mask" wx:if="{{ showFinishModal && settleMode === 'full' }}">
     <view class="modal-box">
       <view class="modal-title">🎉 全款完工结单录入/修改</view>
@@ -350,7 +438,7 @@
     </view>
   </view>
 
-  <!-- 9. 专属弹窗：预付单录入与修改 -->
+  <!-- 11. 弹窗：预付单录入与修改 -->
   <view class="modal-mask" wx:if="{{ showFinishModal && settleMode === 'prepay' }}">
     <view class="modal-box">
       <view class="modal-title">📑 预付单录入/修改</view>

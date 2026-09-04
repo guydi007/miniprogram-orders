@@ -1,6 +1,5 @@
 const app = getApp();
 
-// 自动格式化为标准 YYYY-MM-DD 格式（如 2026-09-02 上午）
 function parseDateSmart(text) {
   if (!text) return '';
   let str = text.trim();
@@ -36,7 +35,8 @@ Page({
     customerPhone: '',
     address: '',
     appointmentTime: '',
-    source: ''
+    source: '',
+    initialFeedback: '' // 🌟 纯文本初始回馈
   },
 
   onLoad() {
@@ -55,7 +55,6 @@ Page({
       cityIndex: 0
     });
 
-    // 只有管理员才需要拉取师傅列表以供指派
     if (user && user.role === 'admin') {
       this.fetchWorkers();
     }
@@ -138,8 +137,12 @@ Page({
     this.setData({ source: e.detail.value.trim() });
   },
 
+  onInitialFeedbackInput(e) {
+    this.setData({ initialFeedback: e.detail.value.trim() });
+  },
+
   async submitOrder() {
-    let { permittedCities, cityIndex, customerPhone, address, appointmentTime, source, workerIndex, currentUser } = this.data;
+    let { permittedCities, cityIndex, customerPhone, address, appointmentTime, source, workerIndex, currentUser, initialFeedback } = this.data;
     appointmentTime = parseDateSmart(appointmentTime);
 
     if (!customerPhone || customerPhone.length < 11) {
@@ -157,7 +160,6 @@ Page({
     let workerPhone = '';
     let workerGroupId = '';
 
-    // 🌟 权限硬拦截：只有管理员可以在录单时直接指派师傅
     if (currentUser && currentUser.role === 'admin' && workerIndex > 0) {
       const matchWorkers = this.data.allWorkers.filter(w => !w.cities || w.cities.includes(currentCity));
       const w = matchWorkers[workerIndex - 1];
@@ -168,9 +170,26 @@ Page({
       }
     }
 
-    const creatorName = (currentUser && currentUser.name) || '未记录';
+    const creatorName = (currentUser && currentUser.name) || '员工';
     const creatorPhone = (currentUser && currentUser.phone) || '';
     const creatorRole = (currentUser && currentUser.role) || '';
+
+    // 🌟 将纯文本回馈直接作为第一条回馈记录
+    const initialFeedbacks = [];
+    if (initialFeedback) {
+      const now = new Date();
+      const pad = (n) => (n < 10 ? '0' + n : '' + n);
+      const timeFormatted = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+      initialFeedbacks.push({
+        id: 'fb_' + Date.now(),
+        time: now.toISOString(),
+        timeFormatted: timeFormatted,
+        operatorName: creatorName,
+        operatorRole: creatorRole,
+        content: initialFeedback,
+        photos: []
+      });
+    }
 
     wx.showLoading({ title: '正在录入...' });
     const db = wx.cloud.database();
@@ -182,6 +201,7 @@ Page({
           customerPhone: customerPhone,
           address: address,
           appointmentTime: appointmentTime,
+          appointmentLogs: [],
           workerName: workerName,
           workerPhone: workerPhone,
           workerGroupId: workerGroupId,
@@ -195,7 +215,7 @@ Page({
           creatorName: creatorName,
           creatorPhone: creatorPhone,
           creatorRole: creatorRole,
-          feedbacks: [],
+          feedbacks: initialFeedbacks,
           paymentLogs: [],
           createTime: new Date().toISOString()
         }

@@ -59,12 +59,42 @@ page {
   white-space: nowrap;
 }
 
+/* 顶部身份角色标签（强制双轴绝对居中） */
 .role-badge {
-  font-size: 20rpx;
-  padding: 4rpx 10rpx;
-  border-radius: 6rpx;
-  flex-shrink: 0;
-  margin-right: 8rpx;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 36rpx !important;
+  padding: 0 12rpx !important;
+  font-size: 20rpx !important;
+  line-height: 1 !important;
+  border-radius: 6rpx !important;
+  box-sizing: border-box !important;
+  vertical-align: middle !important;
+  text-align: center !important;
+  margin-left: 8rpx;
+  white-space: nowrap !important; /* 强制单行，禁止上下折行 */
+  flex-shrink: 0 !important;      /* 防止被前后元素挤压变形 */
+}
+
+/* 师傅绿色小方块背景与字色 */
+.role-worker {
+  background-color: #e8f8f0 !important;
+  color: #07c160 !important;
+}
+
+/* 员工弹窗内的标签同步修复居中 */
+.u-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 34rpx !important;
+  padding: 0 10rpx !important;
+  font-size: 20rpx !important;
+  line-height: 1 !important;
+  border-radius: 6rpx !important;
+  box-sizing: border-box !important;
+  vertical-align: middle !important;
 }
 
 .role-admin { background: #ffebee; color: #e53935; }

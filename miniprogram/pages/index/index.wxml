@@ -6,9 +6,7 @@
       <view class="user-detail">
         <view class="name-row">
           <text class="user-name">{{ currentUser.name || '未认证员工' }}</text>
-          <text class="role-badge role-{{ currentUser.role || 'unbound' }}">
-            {{ currentUser.role === 'admin' ? '管理员' : (currentUser.role === 'service' ? '客服' : (currentUser.role === 'worker' ? '师傅' : '待核验')) }}
-          </text>
+          <text class="role-badge role-{{ currentUser.role || 'unbound' }}">{{ currentUser.role === 'admin' ? '管理' : (currentUser.role === 'service' ? '客服' : (currentUser.role === 'worker' ? '师傅' : '待核验')) }}</text>
           <text class="test-icon-badge" wx:if="{{ currentUser.isTest }}">🧪</text>
         </view>
         <view class="sub-info-row">
@@ -185,7 +183,7 @@
           <view class="u-info">
             <view class="u-name-line">
               <text class="u-name">{{ item.name || '未填姓名' }}</text>
-              <text class="u-badge">{{ item.role === 'admin' ? '管理员' : (item.role === 'service' ? '客服' : '师傅') }}</text>
+              <text class="u-badge">{{ item.role === 'admin' ? '管理' : (item.role === 'service' ? '客服' : '师傅') }}</text>
               <text class="test-icon-badge" wx:if="{{ item.isTest }}">🧪</text>
             </view>
             <text class="u-phone">{{ item.phone || '无电话' }}</text>
