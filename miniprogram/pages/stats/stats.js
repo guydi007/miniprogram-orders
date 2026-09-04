@@ -55,8 +55,11 @@ Page({
   },
 
   onLoad() {
+    // 1. 权限校验：同时兼容 admin、管理、管理员三种写法
     const user = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
-    if (!user || user.role !== 'admin') {
+    const isAdmin = user && (user.role === 'admin' || user.role === '管理' || user.role === '管理员');
+    
+    if (!isAdmin) {
       return wx.showModal({
         title: '无权访问',
         content: '财务营收中心仅限管理员查看。',

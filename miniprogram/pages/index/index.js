@@ -30,7 +30,6 @@ Page({
     showPhoneModal: false,
     inputPhone: '',
 
-    // 员工管理弹窗
     showUserManageModal: false,
     userManageTab: 'list',
     allUserList: [],
@@ -145,9 +144,9 @@ Page({
     const all = this.data.availableCities;
     if (!user) return;
 
-    if (user.role === 'admin') {
+    if (user.role === 'admin' || user.role === '管理') {
       this.setData({ userVisibleCities: all });
-    } else if (user.role === 'service') {
+    } else if (user.role === 'service' || user.role === '客服') {
       const myCities = user.cities || [];
       const visible = all.filter(c => myCities.includes(c));
       this.setData({ userVisibleCities: visible.length > 0 ? visible : all });
@@ -191,7 +190,7 @@ Page({
       wx.hideLoading();
       const dbUser = res.data || user;
 
-      if (dbUser.isTest === true || dbUser.role === 'admin') {
+      if (dbUser.isTest === true || dbUser.role === 'admin' || dbUser.role === '管理') {
         wx.showModal({
           title: '退出 / 更换账号',
           content: `当前为【${dbUser.name}】${dbUser.isTest ? '（测试免锁账号）' : ''}，确定退出并登录其他账号吗？`,
@@ -278,47 +277,64 @@ Page({
     }
   },
 
-  fetchOrders() {
-    return new Promise((resolve) => {
-      const user = this.data.currentUser;
-      if (!user || !user.phone) return resolve();
+  // 突破 20 条限制，分页拉取全部工单
+  async fetchOrders() {
+    const user = this.data.currentUser;
+    if (!user || !user.phone) return;
 
-      const db = wx.cloud.database();
-      wx.showNavigationBarLoading();
+    const db = wx.cloud.database();
+    wx.showNavigationBarLoading();
+    const MAX_LIMIT = 20;
 
-      db.collection('orders').orderBy('createTime', 'desc').get().then(res => {
-        const allOrders = res.data || [];
-        const userCities = user.cities || [];
+    try {
+      const countResult = await db.collection('orders').count();
+      const total = countResult.total;
+      const batchTimes = Math.ceil(total / MAX_LIMIT);
+      const tasks = [];
 
-        let roleFiltered = allOrders;
-        if (user.role === 'worker') {
-          roleFiltered = allOrders.filter(o => 
-            o.workerName === user.name && (!o.city || userCities.includes(o.city))
-          );
-        } else if (user.role === 'service') {
-          roleFiltered = allOrders.filter(o => 
-            !o.city || userCities.includes(o.city)
-          );
-        }
+      for (let i = 0; i < batchTimes; i++) {
+        const promise = db.collection('orders')
+          .orderBy('createTime', 'desc')
+          .skip(i * MAX_LIMIT)
+          .limit(MAX_LIMIT)
+          .get();
+        tasks.push(promise);
+      }
 
-        this.setData({ orders: roleFiltered }, () => {
-          this.applyFilters();
-          wx.hideNavigationBarLoading();
-          resolve();
-        });
-      }).catch(err => {
-        console.error('拉取工单失败：', err);
+      let allOrders = [];
+      if (tasks.length > 0) {
+        const results = await Promise.all(tasks);
+        allOrders = results.reduce((acc, cur) => acc.concat(cur.data || []), []);
+      }
+
+      const userCities = user.cities || [];
+      let roleFiltered = allOrders;
+
+      if (user.role === 'worker' || user.role === '师傅') {
+        roleFiltered = allOrders.filter(o => 
+          o.workerName === user.name && (!o.city || userCities.includes(o.city))
+        );
+      } else if (user.role === 'service' || user.role === '客服') {
+        roleFiltered = allOrders.filter(o => 
+          !o.city || userCities.includes(o.city)
+        );
+      }
+
+      this.setData({ orders: roleFiltered }, () => {
+        this.applyFilters();
         wx.hideNavigationBarLoading();
-        resolve();
       });
-    });
+    } catch (err) {
+      console.error('拉取工单失败：', err);
+      wx.hideNavigationBarLoading();
+    }
   },
 
   applyFilters() {
     const { orders, currentTab, searchKey, selectedCityFilter, currentUser } = this.data;
     let list = [...orders];
 
-    if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'service') && selectedCityFilter !== 'all') {
+    if (currentUser && (currentUser.role === 'admin' || currentUser.role === '管理' || currentUser.role === 'service' || currentUser.role === '客服') && selectedCityFilter !== 'all') {
       list = list.filter(o => o.city === selectedCityFilter);
     }
 
@@ -402,7 +418,6 @@ Page({
     this.setData({ userManageTab: e.currentTarget.dataset.tab });
   },
 
-  // 🌟 核心：清洗 cities 格式，确保权限城市 100% 正确显示
   fetchAllUsers() {
     const db = wx.cloud.database();
     db.collection('users').get().then(res => {
@@ -502,7 +517,7 @@ Page({
       if (checkRes.data && checkRes.data.length > 0) {
         wx.hideLoading();
         const existing = checkRes.data[0];
-        const existingRole = existing.role === 'admin' ? '管理员' : (existing.role === 'service' ? '客服' : '师傅');
+        const existingRole = (existing.role === 'admin' || existing.role === '管理') ? '管理' : ((existing.role === 'service' || existing.role === '客服') ? '客服' : '师傅');
         return wx.showModal({
           title: '手机号冲突',
           content: `该手机号已被【${existing.name || '员工'}】（${existingRole}）占用！不可重复录入。`,
@@ -515,7 +530,7 @@ Page({
         phone: phone,
         role: role,
         cities: cities,
-        groupId: role === 'worker' ? groupId : '',
+        groupId: (role === 'worker' || role === '师傅') ? groupId : '',
         isTest: isTest,
         openid: '',
         createTime: new Date().toISOString()

@@ -6,7 +6,7 @@
       <view class="user-detail">
         <view class="name-row">
           <text class="user-name">{{ currentUser.name || '未认证员工' }}</text>
-          <text class="role-badge role-{{ currentUser.role || 'unbound' }}">{{ currentUser.role === 'admin' ? '管理' : (currentUser.role === 'service' ? '客服' : (currentUser.role === 'worker' ? '师傅' : '待核验')) }}</text>
+          <text class="role-badge role-{{ currentUser.role || 'unbound' }}">{{ (currentUser.role === 'admin' || currentUser.role === '管理') ? '管理' : ((currentUser.role === 'service' || currentUser.role === '客服') ? '客服' : ((currentUser.role === 'worker' || currentUser.role === '师傅') ? '师傅' : '待核验')) }}</text>
           <text class="test-icon-badge" wx:if="{{ currentUser.isTest }}">🧪</text>
         </view>
         <view class="sub-info-row">
@@ -22,21 +22,21 @@
     <view class="header-actions" catchtap="stopBubble">
       <button 
         class="btn-action btn-stats" 
-        wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
+        wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理') }}" 
         bindtap="goToStats"
       >
         📊 营收
       </button>
       <button 
         class="btn-action btn-add-user" 
-        wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
+        wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理') }}" 
         bindtap="openUserManageModal"
       >
         👥 员工
       </button>
       <button 
         class="btn-action btn-create" 
-        wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === 'service') }}" 
+        wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理' || currentUser.role === 'service' || currentUser.role === '客服') }}" 
         bindtap="goToCreate"
       >
         + 录单
@@ -45,7 +45,7 @@
   </view>
 
   <!-- 2. 城市过滤筛选栏 -->
-  <view class="admin-city-bar" wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === 'service') && userVisibleCities.length > 0 }}">
+  <view class="admin-city-bar" wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理' || currentUser.role === 'service' || currentUser.role === '客服') && userVisibleCities.length > 0 }}">
     <scroll-view scroll-x class="city-scroll" enable-flex>
       <view 
         class="city-chip {{ selectedCityFilter === 'all' ? 'city-chip-active' : '' }}" 
@@ -109,7 +109,6 @@
       </view>
 
       <view class="card-body">
-        <!-- 客户电话：纯文本展示，取消点击拨号，严格居中水平对齐 -->
         <view class="row">
           <text class="item-label">客户电话：</text>
           <text class="item-val font-number">{{ item.customerPhone || '-' }}</text>
@@ -126,12 +125,10 @@
           <text class="item-label">同行人员：</text>
           <text class="item-val">{{ item.companionWorkers }}</text>
         </view>
-        <!-- 预付款模式展示 -->
         <view class="row" wx:if="{{ item.settleType === '预付款' }}">
           <text class="item-label">预付收款：</text>
           <text class="item-val amount-val">定金合计 ¥{{ item.depositAmount || item.finalAmount }}（待收尾款 ¥{{ item.remainingAmount || 0 }}）</text>
         </view>
-        <!-- 全款完工模式展示 -->
         <view class="row" wx:elif="{{ item.finalAmount }}">
           <text class="item-label">实收合计：</text>
           <text class="item-val amount-val">¥{{ item.finalAmount }}</text>
@@ -144,13 +141,12 @@
       </view>
     </view>
 
-    <!-- 空数据提示 -->
     <view class="empty-state" wx:if="{{ filteredOrders.length === 0 }}">
       <text>{{ !currentUser ? '请先绑定手机号以查看工单' : '当前城市或分类下暂无工单' }}</text>
     </view>
   </view>
 
-  <!-- 手机号核验登录弹窗 -->
+  <!-- 手机号核验弹窗 -->
   <view class="modal-mask" wx:if="{{ showPhoneModal }}">
     <view class="modal-box">
       <view class="modal-title">🔐 员工身份核验</view>
@@ -169,7 +165,7 @@
     </view>
   </view>
 
-  <!-- 管理员专属：员工管理与录入弹窗 -->
+  <!-- 员工管理弹窗 -->
   <view class="modal-mask" wx:if="{{ showUserManageModal }}">
     <view class="modal-box user-manage-modal">
       <view class="type-switch">
@@ -177,18 +173,17 @@
         <view class="type-btn {{ userManageTab === 'add' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="add">➕ 新增员工</view>
       </view>
 
-      <!-- 选项卡 1：员工列表 -->
       <view class="user-list-box" wx:if="{{ userManageTab === 'list' }}">
         <view class="user-manage-item" wx:for="{{ allUserList }}" wx:key="_id">
           <view class="u-info">
             <view class="u-name-line">
               <text class="u-name">{{ item.name || '未填姓名' }}</text>
-              <text class="u-badge">{{ item.role === 'admin' ? '管理' : (item.role === 'service' ? '客服' : '师傅') }}</text>
+              <text class="u-badge">{{ (item.role === 'admin' || item.role === '管理') ? '管理' : ((item.role === 'service' || item.role === '客服') ? '客服' : '师傅') }}</text>
               <text class="test-icon-badge" wx:if="{{ item.isTest }}">🧪</text>
             </view>
             <text class="u-phone">{{ item.phone || '无电话' }}</text>
             <text class="u-sub">权限城市：{{ item.citiesText }}</text>
-            <text class="u-sub" wx:if="{{ item.role === 'worker' && item.groupId }}">📢 关联群号：{{ item.groupId }}</text>
+            <text class="u-sub" wx:if="{{ (item.role === 'worker' || item.role === '师傅') && item.groupId }}">📢 关联群号：{{ item.groupId }}</text>
             <text class="u-status {{ item.isTest ? 'test-status' : (item.openid ? 'bound' : 'unbound') }}">
               {{ item.isTest ? '⚡ 免锁账号（可自由切换）' : (item.openid ? '🟢 已绑定微信号' : '⚪ 待首次登录绑定') }}
             </text>
@@ -210,7 +205,6 @@
         <view class="empty-stats" wx:if="{{ allUserList.length === 0 }}">暂无员工数据</view>
       </view>
 
-      <!-- 选项卡 2：录入新员工 -->
       <view class="user-add-box" wx:if="{{ userManageTab === 'add' }}">
         <text class="field-title">员工姓名：</text>
         <input 
@@ -235,7 +229,7 @@
           <radio-group class="role-radio-group" bindchange="onNewUserRoleChange">
             <label class="radio-item"><radio value="worker" checked="{{ newUserRole === 'worker' }}" />师傅</label>
             <label class="radio-item"><radio value="service" checked="{{ newUserRole === 'service' }}" />客服</label>
-            <label class="radio-item"><radio value="admin" checked="{{ newUserRole === 'admin' }}" />管理员</label>
+            <label class="radio-item"><radio value="admin" checked="{{ newUserRole === 'admin' }}" />管理</label>
           </radio-group>
         </view>
 

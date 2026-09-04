@@ -43,15 +43,16 @@ Page({
     candidateWorkers: [],
     candidateWorkerNames: [],
 
-    // 修改预约时间
     showEditTimeModal: false,
     editTimeInput: '',
 
-    // 取消工单
     showCancelModal: false,
     cancelReason: '',
 
-    // 结单/预付弹窗
+    // 师傅未成单弹窗状态
+    showFailModal: false,
+    failReason: '',
+
     showFinishModal: false,
     settleMode: 'full',
     initialSnapshot: null,
@@ -69,7 +70,6 @@ Page({
     modalNote: '',
     localPhotos: [],
 
-    // 进度回馈弹窗
     showFeedbackModal: false,
     feedbackContent: '',
     feedbackPhotos: []
@@ -104,6 +104,9 @@ Page({
       if (order.cancelTime) {
         order.cancelTimeFormatted = formatDateTime(order.cancelTime);
       }
+      if (order.failTime) {
+        order.failTimeFormatted = formatDateTime(order.failTime);
+      }
       if (Array.isArray(order.paymentLogs)) {
         order.paymentLogs = order.paymentLogs.map(item => ({
           ...item,
@@ -126,7 +129,7 @@ Page({
       this.setData({ order: order });
 
       const user = this.data.currentUser;
-      if (user && user.role === 'admin') {
+      if (user && (user.role === 'admin' || user.role === '管理')) {
         this.fetchCandidateWorkers(order.city);
       }
     }).catch(err => {
@@ -138,28 +141,42 @@ Page({
 
   fetchCandidateWorkers(city) {
     const db = wx.cloud.database();
-    db.collection('users').where({ role: 'worker' }).get().then(res => {
+    const _ = db.command;
+
+    db.collection('users').where({
+      role: _.in(['worker', '师傅'])
+    }).get().then(res => {
       const all = res.data || [];
-      const matched = all.filter(w => {
-        if (!city) return true;
+      const cleanCity = (city || '').trim();
+
+      let matched = all.filter(w => {
+        if (!cleanCity) return true;
         let citiesArr = [];
         if (Array.isArray(w.cities)) citiesArr = w.cities;
         else if (w.cities && typeof w.cities === 'object') citiesArr = Object.values(w.cities);
         else if (typeof w.cities === 'string') citiesArr = [w.cities];
-        return citiesArr.includes(city);
+
+        if (citiesArr.length === 0) return true;
+        return citiesArr.some(c => c && (c.includes(cleanCity) || cleanCity.includes(c)));
       });
+
+      if (matched.length === 0 && all.length > 0) {
+        matched = all;
+      }
 
       this.setData({
         candidateWorkers: matched,
-        candidateWorkerNames: matched.map(w => w.name)
+        candidateWorkerNames: matched.map(w => w.name + (w.groupId ? ` (${w.groupId})` : ''))
       });
-    }).catch(e => console.error(e));
+    }).catch(e => console.error('获取师傅列表失败：', e));
   },
 
   async onAssignWorker(e) {
     const idx = Number(e.detail.value);
     const worker = this.data.candidateWorkers[idx];
-    if (!worker) return;
+    if (!worker) {
+      return wx.showToast({ title: '请选择有效师傅', icon: 'none' });
+    }
 
     wx.showLoading({ title: '正在指派师傅...' });
     const db = wx.cloud.database();
@@ -179,7 +196,11 @@ Page({
     } catch (err) {
       wx.hideLoading();
       console.error('指派失败：', err);
-      wx.showToast({ title: '指派失败，请重试', icon: 'none' });
+      wx.showModal({
+        title: '指派失败',
+        content: '数据更新被拒绝，请确认云控制台 orders 集合权限已设为“所有用户可读写”。',
+        showCancel: false
+      });
     }
   },
 
@@ -204,7 +225,6 @@ Page({
     });
   },
 
-  // 🌟 修改预约时间方法
   openEditTimeModal() {
     this.setData({
       showEditTimeModal: true,
@@ -261,7 +281,6 @@ Page({
     const existingLogs = Array.isArray(this.data.order.appointmentLogs) ? this.data.order.appointmentLogs : [];
     const updatedLogs = [newLog, ...existingLogs];
 
-    // 同步把改期记录写入一条回馈，方便现场人员查阅
     const changeFeedback = {
       id: 'fb_' + Date.now(),
       time: now.toISOString(),
@@ -295,7 +314,6 @@ Page({
     }
   },
 
-  // 🌟 取消工单（状态归类为未成单）
   openCancelModal() {
     this.setData({
       showCancelModal: true,
@@ -338,7 +356,7 @@ Page({
     try {
       await db.collection('orders').doc(this.data.orderId).update({
         data: {
-          status: '未成单', // 🌟 归类为未成单
+          status: '未成单',
           cancelReason: reason,
           cancelOperator: (currentUser && currentUser.name) || '员工',
           cancelTime: now.toISOString(),
@@ -357,31 +375,67 @@ Page({
     }
   },
 
-  // 师傅直接标记未成单
-  markFail() {
-    wx.showModal({
-      title: '确认标为未成单？',
-      content: '确认后该工单将进入未成单归档。',
-      confirmColor: '#e53935',
-      success: async (res) => {
-        if (res.confirm) {
-          wx.showLoading({ title: '更新中...' });
-          const db = wx.cloud.database();
-          try {
-            await db.collection('orders').doc(this.data.orderId).update({
-              data: { status: '未成单' }
-            });
-            wx.hideLoading();
-            wx.showToast({ title: '已置为未成单', icon: 'success' });
-            this.fetchOrderDetail(this.data.orderId);
-          } catch (err) {
-            wx.hideLoading();
-            console.error('更新未成单失败：', err);
-            wx.showToast({ title: '操作失败', icon: 'none' });
-          }
-        }
-      }
+  // 师傅端专属：打开未成单理由弹窗
+  openFailModal() {
+    this.setData({
+      showFailModal: true,
+      failReason: ''
     });
+  },
+
+  closeFailModal() {
+    this.setData({ showFailModal: false });
+  },
+
+  onFailReasonInput(e) {
+    this.setData({ failReason: e.detail.value.trim() });
+  },
+
+  // 师傅端专属：提交未成单理由并归档
+  async submitFailOrder() {
+    const reason = this.data.failReason;
+    if (!reason) {
+      return wx.showToast({ title: '请填写未成单原因', icon: 'none' });
+    }
+
+    wx.showLoading({ title: '正在归档未成单...' });
+    const now = new Date();
+    const currentUser = this.data.currentUser;
+
+    const failFeedback = {
+      id: 'fb_' + Date.now(),
+      time: now.toISOString(),
+      timeFormatted: formatDateTime(now),
+      operatorName: (currentUser && currentUser.name) || '师傅',
+      operatorRole: (currentUser && currentUser.role) || 'worker',
+      content: `[师傅标记未成单] 理由：${reason}`,
+      photos: []
+    };
+
+    const existingFeedbacks = Array.isArray(this.data.order.feedbacks) ? this.data.order.feedbacks : [];
+    const updatedFeedbacks = [failFeedback, ...existingFeedbacks];
+
+    const db = wx.cloud.database();
+    try {
+      await db.collection('orders').doc(this.data.orderId).update({
+        data: {
+          status: '未成单',
+          failReason: reason,
+          failOperator: (currentUser && currentUser.name) || '师傅',
+          failTime: now.toISOString(),
+          feedbacks: updatedFeedbacks
+        }
+      });
+
+      wx.hideLoading();
+      this.setData({ showFailModal: false });
+      wx.showToast({ title: '已归入未成单', icon: 'success' });
+      this.fetchOrderDetail(this.data.orderId);
+    } catch (err) {
+      wx.hideLoading();
+      console.error('更新未成单失败：', err);
+      wx.showToast({ title: '操作失败，请重试', icon: 'none' });
+    }
   },
 
   recalcAmounts() {

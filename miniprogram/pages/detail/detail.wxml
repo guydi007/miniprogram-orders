@@ -39,14 +39,14 @@
       <text class="info-val">{{ order.address ? '📍 ' + order.address : '-' }}</text>
     </view>
 
-    <!-- 🌟 预约时间（支持客服/管理员在线改期） -->
+    <!-- 预约时间 -->
     <view class="info-row">
       <text class="info-label">预约时间：</text>
       <view class="time-row-val">
         <text class="info-val highlight">{{ order.appointmentTime }}</text>
         <view 
           class="btn-edit-time" 
-          wx:if="{{ (currentUser.role === 'admin' || currentUser.role === 'service') && order.status !== '已完工' && order.status !== '未成单' }}" 
+          wx:if="{{ (currentUser.role === 'admin' || currentUser.role === '管理' || currentUser.role === 'service' || currentUser.role === '客服') && order.status !== '已完工' && order.status !== '未成单' }}" 
           bindtap="openEditTimeModal"
         >
           <text class="edit-icon">✏️</text>
@@ -55,7 +55,7 @@
       </view>
     </view>
 
-    <!-- 🌟 预约时间改期留痕展示 -->
+    <!-- 预约时间改期留痕展示 -->
     <view class="time-logs-box" wx:if="{{ order.appointmentLogs && order.appointmentLogs.length }}">
       <view class="time-log-item" wx:for="{{ order.appointmentLogs }}" wx:key="id">
         <text class="time-log-tag">改期</text>
@@ -88,10 +88,17 @@
       <text class="info-label">{{ order.settleType === '预付款' ? '最新收款时间：' : '结算时间：' }}</text>
       <text class="info-val">{{ order.finishTimeFormatted || order.finishTime }}</text>
     </view>
-    <!-- 取消理由说明展示 -->
+    
+    <!-- 管理/客服取消原因展示 -->
     <view class="info-row cancel-row" wx:if="{{ order.cancelReason }}">
       <text class="info-label font-red">取消原因：</text>
       <text class="info-val font-red">{{ order.cancelReason }}（{{ order.cancelOperator || '管理' }} {{ order.cancelTimeFormatted || '' }}）</text>
+    </view>
+
+    <!-- 师傅未成单原因展示 -->
+    <view class="info-row cancel-row" wx:if="{{ order.failReason }}">
+      <text class="info-label font-red">未成单原因：</text>
+      <text class="info-val font-red">{{ order.failReason }}（{{ order.failOperator || '师傅' }} {{ order.failTimeFormatted || '' }}）</text>
     </view>
   </view>
 
@@ -106,8 +113,8 @@
         src="{{ item }}" 
         mode="aspectFill" 
         bindtap="previewPhoto" 
-        data-url="{{ item }}"
-        data-list="{{ order.finishPhotos }}"
+        data-url="{{ item }}" 
+        data-list="{{ order.finishPhotos }}" 
       />
     </view>
     <view class="finish-note" wx:if="{{ order.finishNote }}">
@@ -117,18 +124,18 @@
 
   <!-- 4. 操作按钮栏 -->
   <view class="actions-bar">
-    <!-- 仅客服可见：催单 -->
+    <!-- 客服可见：催单 -->
     <button 
       class="btn-action btn-urgent" 
-      wx:if="{{ currentUser && currentUser.role === 'service' && order.status !== '已完工' && order.status !== '未成单' }}" 
+      wx:if="{{ (currentUser.role === 'service' || currentUser.role === '客服') && order.status !== '已完工' && order.status !== '未成单' }}" 
       bindtap="triggerUrgent"
     >
       🚨 催单
     </button>
 
-    <!-- 仅管理员可见：指派/改派师傅 -->
+    <!-- 管理员/管理可见：指派/改派师傅 -->
     <picker 
-      wx:if="{{ currentUser && currentUser.role === 'admin' && order.status !== '已完工' && order.status !== '未成单' }}" 
+      wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理') && order.status !== '已完工' && order.status !== '未成单' }}" 
       bindchange="onAssignWorker" 
       range="{{ candidateWorkerNames }}"
       class="picker-btn-wrapper"
@@ -147,37 +154,37 @@
       💬 回馈
     </button>
 
-    <!-- 🌟 客服与管理员专属：取消工单（状态归类为未成单） -->
+    <!-- 管理与客服专属：取消工单 -->
     <button 
       class="btn-action btn-cancel" 
-      wx:if="{{ (currentUser.role === 'admin' || currentUser.role === 'service') && order.status !== '已完工' && order.status !== '未成单' }}" 
+      wx:if="{{ (currentUser.role === 'admin' || currentUser.role === '管理' || currentUser.role === 'service' || currentUser.role === '客服') && order.status !== '已完工' && order.status !== '未成单' }}" 
       bindtap="openCancelModal"
     >
       ❌ 取消工单
     </button>
 
-    <!-- 师傅专属：未成单 -->
+    <!-- 师傅专属：未成单（点击唤起理由弹窗） -->
     <button 
       class="btn-action btn-fail" 
-      wx:if="{{ currentUser && currentUser.role === 'worker' && order.status !== '未成单' && order.status !== '已完工' }}" 
-      bindtap="markFail"
+      wx:if="{{ (currentUser.role === 'worker' || currentUser.role === '师傅') && order.status !== '未成单' && order.status !== '已完工' }}" 
+      bindtap="openFailModal"
     >
       未成单
     </button>
 
-    <!-- 师傅专属：预付单（二选一互斥） -->
+    <!-- 师傅专属：预付单 -->
     <button 
       class="btn-action btn-prepay" 
-      wx:if="{{ currentUser && currentUser.role === 'worker' && order.status !== '未成单' && (!order.settleType || order.settleType === '预付款') }}" 
+      wx:if="{{ (currentUser.role === 'worker' || currentUser.role === '师傅') && order.status !== '未成单' && (!order.settleType || order.settleType === '预付款') }}" 
       bindtap="openPrepayModal"
     >
       {{ order.settleType === '预付款' ? (order.remainingAmount > 0 ? '续收/结清尾款' : '修改预付单') : '预付单' }}
     </button>
 
-    <!-- 师傅专属：全款结单（二选一互斥） -->
+    <!-- 师傅专属：全款结单 -->
     <button 
       class="btn-action btn-done" 
-      wx:if="{{ currentUser && currentUser.role === 'worker' && order.status !== '未成单' && (!order.settleType || order.settleType === '全款') }}" 
+      wx:if="{{ (currentUser.role === 'worker' || currentUser.role === '师傅') && order.status !== '未成单' && (!order.settleType || order.settleType === '全款') }}" 
       bindtap="openFinishModal"
     >
       {{ order.settleType === '全款' ? '修改全款结算' : '全款结单' }}
@@ -202,10 +209,10 @@
               wx:for-item="p" 
               wx:key="*this" 
               src="{{ p }}" 
-              mode="aspectFill"
-              bindtap="previewPhoto"
-              data-url="{{ p }}"
-              data-list="{{ item.photos }}"
+              mode="aspectFill" 
+              bindtap="previewPhoto" 
+              data-url="{{ p }}" 
+              data-list="{{ item.photos }}" 
             />
           </view>
         </view>
@@ -253,10 +260,10 @@
               wx:for-item="p" 
               wx:key="*this" 
               src="{{ p }}" 
-              mode="aspectFill"
-              bindtap="previewPhoto"
-              data-url="{{ p }}"
-              data-list="{{ item.photos }}"
+              mode="aspectFill" 
+              bindtap="previewPhoto" 
+              data-url="{{ p }}" 
+              data-list="{{ item.photos }}" 
             />
           </view>
         </view>
@@ -264,7 +271,7 @@
     </view>
   </view>
 
-  <!-- 7. 🌟 弹窗：修改预约时间 -->
+  <!-- 7. 弹窗：修改预约时间 -->
   <view class="modal-mask" wx:if="{{ showEditTimeModal }}">
     <view class="modal-box">
       <view class="modal-title">📅 修改预约上门时间</view>
@@ -276,11 +283,10 @@
           placeholder="如：2026-09-03 上午" 
           value="{{ editTimeInput }}" 
           bindinput="onEditTimeInput" 
-          bindblur="onEditTimeBlur"
+          bindblur="onEditTimeBlur" 
         />
       </view>
 
-      <!-- 快捷输入胶囊 -->
       <view class="quick-time-grid mt-20">
         <view class="quick-pill" bindtap="onQuickEditTime" data-val="今天 上午">今天 上午</view>
         <view class="quick-pill" bindtap="onQuickEditTime" data-val="今天 下午">今天 下午</view>
@@ -295,7 +301,7 @@
     </view>
   </view>
 
-  <!-- 8. 🌟 弹窗：取消工单（必填取消理由） -->
+  <!-- 8. 弹窗：管理/客服取消工单 -->
   <view class="modal-mask" wx:if="{{ showCancelModal }}">
     <view class="modal-box">
       <view class="modal-title font-red">❌ 取消工单确认</view>
@@ -354,7 +360,7 @@
     </view>
   </view>
 
-  <!-- 10. 弹窗：全款完工结单录入/修改 -->
+  <!-- 10. 弹窗：全款结单录入/修改 -->
   <view class="modal-mask" wx:if="{{ showFinishModal && settleMode === 'full' }}">
     <view class="modal-box">
       <view class="modal-title">🎉 全款完工结单录入/修改</view>
@@ -362,33 +368,15 @@
       <view class="split-pay-grid">
         <view class="split-item">
           <text class="split-label">现金 (元)</text>
-          <input 
-            class="split-input" 
-            type="digit" 
-            placeholder="0" 
-            value="{{ inputCash }}" 
-            bindinput="onCashInput" 
-          />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputCash }}" bindinput="onCashInput" />
         </view>
         <view class="split-item">
           <text class="split-label">微信 (元)</text>
-          <input 
-            class="split-input" 
-            type="digit" 
-            placeholder="0" 
-            value="{{ inputWechat }}" 
-            bindinput="onWechatInput" 
-          />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputWechat }}" bindinput="onWechatInput" />
         </view>
         <view class="split-item">
           <text class="split-label">支付宝 (元)</text>
-          <input 
-            class="split-input" 
-            type="digit" 
-            placeholder="0" 
-            value="{{ inputAlipay }}" 
-            bindinput="onAlipayInput" 
-          />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputAlipay }}" bindinput="onAlipayInput" />
         </view>
       </view>
 
@@ -399,12 +387,7 @@
 
       <view class="field-item mt-20">
         <text class="field-label">同行人员（手输文本）：</text>
-        <input 
-          class="modal-input" 
-          placeholder="如：学徒小张、王师傅（无则留空）" 
-          value="{{ modalCompanions }}" 
-          bindinput="onModalCompanionsInput" 
-        />
+        <input class="modal-input" placeholder="如：学徒小张、王师傅（无则留空）" value="{{ modalCompanions }}" bindinput="onModalCompanionsInput" />
       </view>
 
       <view class="field-item mt-20">
@@ -423,12 +406,7 @@
 
       <view class="field-item mt-20">
         <text class="field-label">施工/修改备注说明：</text>
-        <textarea 
-          class="modal-textarea" 
-          placeholder="更换明细、费用调整原因等..." 
-          value="{{ modalNote }}" 
-          bindinput="onModalNoteInput" 
-        />
+        <textarea class="modal-textarea" placeholder="更换明细、费用调整原因等..." value="{{ modalNote }}" bindinput="onModalNoteInput" />
       </view>
 
       <view class="modal-btns mt-30">
@@ -447,33 +425,15 @@
       <view class="split-pay-grid">
         <view class="split-item">
           <text class="split-label">现金</text>
-          <input 
-            class="split-input" 
-            type="digit" 
-            placeholder="0" 
-            value="{{ inputCash }}" 
-            bindinput="onCashInput" 
-          />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputCash }}" bindinput="onCashInput" />
         </view>
         <view class="split-item">
           <text class="split-label">微信</text>
-          <input 
-            class="split-input" 
-            type="digit" 
-            placeholder="0" 
-            value="{{ inputWechat }}" 
-            bindinput="onWechatInput" 
-          />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputWechat }}" bindinput="onWechatInput" />
         </view>
         <view class="split-item">
           <text class="split-label">支付宝</text>
-          <input 
-            class="split-input" 
-            type="digit" 
-            placeholder="0" 
-            value="{{ inputAlipay }}" 
-            bindinput="onAlipayInput" 
-          />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputAlipay }}" bindinput="onAlipayInput" />
         </view>
       </view>
 
@@ -484,13 +444,7 @@
 
       <view class="field-item mt-20">
         <text class="field-label required">工程总计金额 (元)：</text>
-        <input 
-          class="modal-input" 
-          type="digit" 
-          placeholder="如：800" 
-          value="{{ inputTotalAmount }}" 
-          bindinput="onTotalAmountInput" 
-        />
+        <input class="modal-input" type="digit" placeholder="如：800" value="{{ inputTotalAmount }}" bindinput="onTotalAmountInput" />
       </view>
 
       <view class="calc-remain-box">
@@ -499,12 +453,7 @@
 
       <view class="field-item mt-20">
         <text class="field-label">同行人员（手输文本）：</text>
-        <input 
-          class="modal-input" 
-          placeholder="如：学徒小赵、李师傅" 
-          value="{{ modalCompanions }}" 
-          bindinput="onModalCompanionsInput" 
-        />
+        <input class="modal-input" placeholder="如：学徒小赵、李师傅" value="{{ modalCompanions }}" bindinput="onModalCompanionsInput" />
       </view>
 
       <view class="field-item mt-20">
@@ -523,17 +472,35 @@
 
       <view class="field-item mt-20">
         <text class="field-label">约定说明与修改备注：</text>
-        <textarea 
-          class="modal-textarea" 
-          placeholder="约定上门安装时间、尾款结算方式说明等..." 
-          value="{{ modalNote }}" 
-          bindinput="onModalNoteInput" 
-        />
+        <textarea class="modal-textarea" placeholder="约定上门安装时间、尾款结算方式说明等..." value="{{ modalNote }}" bindinput="onModalNoteInput" />
       </view>
 
       <view class="modal-btns mt-30">
         <button class="modal-btn cancel" bindtap="closeFinishModal">取消</button>
         <button class="modal-btn confirm" bindtap="submitFinishOrder">确认保存并留痕</button>
+      </view>
+    </view>
+  </view>
+
+  <!-- 12. 弹窗：师傅未成单确认（必填原因） -->
+  <view class="modal-mask" wx:if="{{ showFailModal }}">
+    <view class="modal-box">
+      <view class="modal-title font-red">⚠️ 标记未成单确认</view>
+      <view class="cancel-tips">标记后工单将归入【未成单】归档，请务必如实填写未成单原因：</view>
+      
+      <view class="field-item mt-10">
+        <text class="field-label required">未成单理由：</text>
+        <textarea 
+          class="modal-textarea" 
+          placeholder="如：客户不在家且拒接电话、现场情况与报修严重不符无配件等..." 
+          value="{{ failReason }}" 
+          bindinput="onFailReasonInput" 
+        />
+      </view>
+
+      <view class="modal-btns mt-30">
+        <button class="modal-btn cancel" bindtap="closeFailModal">取消</button>
+        <button class="modal-btn btn-danger" bindtap="submitFailOrder">确认未成单</button>
       </view>
     </view>
   </view>

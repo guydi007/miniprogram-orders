@@ -52,14 +52,15 @@ page {
   font-size: 28rpx;
   font-weight: bold;
   color: #333333;
-  margin-right: 8rpx;
-  max-width: 150rpx;
+  margin-right: 12rpx;
+  max-width: 220rpx;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
-/* 顶部身份角色标签（强制双轴绝对居中） */
+/* 顶部身份角色标签（防折行、防压缩、双轴居中） */
 .role-badge {
   display: inline-flex !important;
   align-items: center !important;
@@ -73,28 +74,8 @@ page {
   vertical-align: middle !important;
   text-align: center !important;
   margin-left: 8rpx;
-  white-space: nowrap !important; /* 强制单行，禁止上下折行 */
-  flex-shrink: 0 !important;      /* 防止被前后元素挤压变形 */
-}
-
-/* 师傅绿色小方块背景与字色 */
-.role-worker {
-  background-color: #e8f8f0 !important;
-  color: #07c160 !important;
-}
-
-/* 员工弹窗内的标签同步修复居中 */
-.u-badge {
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  height: 34rpx !important;
-  padding: 0 10rpx !important;
-  font-size: 20rpx !important;
-  line-height: 1 !important;
-  border-radius: 6rpx !important;
-  box-sizing: border-box !important;
-  vertical-align: middle !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
 }
 
 .role-admin { background: #ffebee; color: #e53935; }
@@ -284,7 +265,6 @@ page {
 
 .card-body { display: flex; flex-direction: column; font-size: 26rpx; }
 
-/* 🌟 核心：垂直强制居中对齐，保证“客户电话：”与号码在同一水平线上 */
 .row {
   display: flex;
   align-items: center;
@@ -439,7 +419,20 @@ page {
 
 .u-name-line { display: flex; align-items: center; gap: 8rpx; }
 .u-name { font-size: 28rpx; font-weight: bold; color: #333333; }
-.u-badge { font-size: 20rpx; background: #e2e8f0; padding: 2rpx 10rpx; border-radius: 6rpx; color: #475569; }
+.u-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 34rpx !important;
+  padding: 0 10rpx !important;
+  font-size: 20rpx !important;
+  line-height: 1 !important;
+  border-radius: 6rpx !important;
+  box-sizing: border-box !important;
+  vertical-align: middle !important;
+  background: #e2e8f0;
+  color: #475569;
+}
 .u-phone { font-size: 22rpx; color: #0284c7; margin-top: 4rpx; display: block; }
 .u-sub { font-size: 20rpx; color: #475569; margin-top: 2rpx; display: block; }
 .u-status { font-size: 20rpx; margin-top: 4rpx; display: block; }
