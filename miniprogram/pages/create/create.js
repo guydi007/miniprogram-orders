@@ -35,8 +35,13 @@ Page({
     customerPhone: '',
     address: '',
     appointmentTime: '',
-    source: '',
-    initialFeedback: '' // 🌟 纯文本初始回馈
+
+    // 来源下拉数据，带智能兜底
+    sourceOptions: ['悦乐居', '津窗修', '窗匠', '京窗修', '窗暖家'],
+    sourceIndex: 0,
+    source: '悦乐居',
+
+    initialFeedback: ''
   },
 
   onLoad() {
@@ -44,7 +49,7 @@ Page({
     let allCities = wx.getStorageSync('availableCities') || (app.globalData && app.globalData.availableCities) || ['天津', '北京'];
 
     let permitted = allCities;
-    if (user && user.role !== 'admin' && user.cities && user.cities.length) {
+    if (user && user.role !== 'admin' && user.role !== '管理' && user.cities && user.cities.length) {
       permitted = allCities.filter(c => user.cities.includes(c));
     }
     if (!permitted.length) permitted = ['天津'];
@@ -55,15 +60,46 @@ Page({
       cityIndex: 0
     });
 
-    if (user && user.role === 'admin') {
+    if (user && (user.role === 'admin' || user.role === '管理')) {
       this.fetchWorkers();
     }
+
+    this.fetchSources();
+  },
+
+  // 动态从数据库拉取启用的渠道
+  async fetchSources() {
+    const db = wx.cloud.database();
+    try {
+      const res = await db.collection('order_sources').orderBy('sort', 'asc').get();
+      if (res.data && res.data.length > 0) {
+        const names = res.data.map(item => item.name).filter(Boolean);
+        this.setData({
+          sourceOptions: names,
+          sourceIndex: 0,
+          source: names[0] || ''
+        });
+      }
+    } catch (e) {
+      console.warn('拉取 order_sources 失败，使用内置兜底列表：', e);
+    }
+  },
+
+  onSourceChange(e) {
+    const idx = Number(e.detail.value);
+    this.setData({
+      sourceIndex: idx,
+      source: this.data.sourceOptions[idx] || ''
+    });
   },
 
   async fetchWorkers() {
     const db = wx.cloud.database();
+    const _ = db.command;
     try {
-      const res = await db.collection('users').where({ role: 'worker' }).get();
+      const res = await db.collection('users').where({
+        role: _.in(['worker', '师傅'])
+      }).get();
       const workers = res.data || [];
       this.setData({ allWorkers: workers }, () => {
         this.filterWorkersByCity();
@@ -75,8 +111,21 @@ Page({
 
   filterWorkersByCity() {
     const currentCity = this.data.permittedCities[this.data.cityIndex];
-    const matchWorkers = this.data.allWorkers.filter(w => !w.cities || w.cities.includes(currentCity));
-    const names = ['暂不指派', ...matchWorkers.map(w => w.name)];
+    const cleanCity = (currentCity || '').trim();
+
+    const matchWorkers = this.data.allWorkers.filter(w => {
+      if (!cleanCity) return true;
+      let citiesArr = [];
+      if (Array.isArray(w.cities)) citiesArr = w.cities;
+      else if (w.cities && typeof w.cities === 'object') citiesArr = Object.values(w.cities);
+      else if (typeof w.cities === 'string') citiesArr = [w.cities];
+
+      if (citiesArr.length === 0) return true;
+      return citiesArr.some(c => c && (c.includes(cleanCity) || cleanCity.includes(c)));
+    });
+
+    const fallbackWorkers = matchWorkers.length > 0 ? matchWorkers : this.data.allWorkers;
+    const names = ['暂不指派', ...fallbackWorkers.map(w => w.name + (w.groupId ? ` (${w.groupId})` : ''))];
 
     this.setData({
       workerNames: names,
@@ -87,7 +136,7 @@ Page({
 
   onCityChange(e) {
     this.setData({ cityIndex: Number(e.detail.value) }, () => {
-      if (this.data.currentUser && this.data.currentUser.role === 'admin') {
+      if (this.data.currentUser && (this.data.currentUser.role === 'admin' || this.data.currentUser.role === '管理')) {
         this.filterWorkersByCity();
       }
     });
@@ -96,11 +145,24 @@ Page({
   onWorkerChange(e) {
     const idx = Number(e.detail.value);
     const currentCity = this.data.permittedCities[this.data.cityIndex];
-    const matchWorkers = this.data.allWorkers.filter(w => !w.cities || w.cities.includes(currentCity));
+    const cleanCity = (currentCity || '').trim();
+
+    const matchWorkers = this.data.allWorkers.filter(w => {
+      if (!cleanCity) return true;
+      let citiesArr = [];
+      if (Array.isArray(w.cities)) citiesArr = w.cities;
+      else if (w.cities && typeof w.cities === 'object') citiesArr = Object.values(w.cities);
+      else if (typeof w.cities === 'string') citiesArr = [w.cities];
+
+      if (citiesArr.length === 0) return true;
+      return citiesArr.some(c => c && (c.includes(cleanCity) || cleanCity.includes(c)));
+    });
+
+    const fallbackWorkers = matchWorkers.length > 0 ? matchWorkers : this.data.allWorkers;
 
     let group = '';
     if (idx > 0) {
-      const selected = matchWorkers[idx - 1];
+      const selected = fallbackWorkers[idx - 1];
       group = selected ? (selected.groupId || '') : '';
     }
 
@@ -133,16 +195,12 @@ Page({
     this.setData({ appointmentTime: formatted });
   },
 
-  onSourceInput(e) {
-    this.setData({ source: e.detail.value.trim() });
-  },
-
   onInitialFeedbackInput(e) {
     this.setData({ initialFeedback: e.detail.value.trim() });
   },
 
   async submitOrder() {
-    let { permittedCities, cityIndex, customerPhone, address, appointmentTime, source, workerIndex, currentUser, initialFeedback } = this.data;
+    let { permittedCities, cityIndex, customerPhone, address, appointmentTime, source, sourceOptions, sourceIndex, workerIndex, currentUser, initialFeedback } = this.data;
     appointmentTime = parseDateSmart(appointmentTime);
 
     if (!customerPhone || customerPhone.length < 11) {
@@ -155,17 +213,31 @@ Page({
       return wx.showToast({ title: '请输入预约时间', icon: 'none' });
     }
 
+    const finalSource = source || sourceOptions[sourceIndex] || '悦乐居';
     const currentCity = permittedCities[cityIndex];
     let workerName = '';
     let workerPhone = '';
     let workerGroupId = '';
 
-    if (currentUser && currentUser.role === 'admin' && workerIndex > 0) {
-      const matchWorkers = this.data.allWorkers.filter(w => !w.cities || w.cities.includes(currentCity));
-      const w = matchWorkers[workerIndex - 1];
+    const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === '管理');
+    if (isAdmin && workerIndex > 0) {
+      const cleanCity = (currentCity || '').trim();
+      const matchWorkers = this.data.allWorkers.filter(w => {
+        if (!cleanCity) return true;
+        let citiesArr = [];
+        if (Array.isArray(w.cities)) citiesArr = w.cities;
+        else if (w.cities && typeof w.cities === 'object') citiesArr = Object.values(w.cities);
+        else if (typeof w.cities === 'string') citiesArr = [w.cities];
+
+        if (citiesArr.length === 0) return true;
+        return citiesArr.some(c => c && (c.includes(cleanCity) || cleanCity.includes(c)));
+      });
+
+      const fallbackWorkers = matchWorkers.length > 0 ? matchWorkers : this.data.allWorkers;
+      const w = fallbackWorkers[workerIndex - 1];
       if (w) {
         workerName = w.name;
-        workerPhone = w.phone;
+        workerPhone = w.phone || '';
         workerGroupId = w.groupId || '';
       }
     }
@@ -174,7 +246,6 @@ Page({
     const creatorPhone = (currentUser && currentUser.phone) || '';
     const creatorRole = (currentUser && currentUser.role) || '';
 
-    // 🌟 将纯文本回馈直接作为第一条回馈记录
     const initialFeedbacks = [];
     if (initialFeedback) {
       const now = new Date();
@@ -209,7 +280,7 @@ Page({
           finalAmount: 0,
           finishPhotos: [],
           finishNote: '',
-          source: source || '手工录入',
+          source: finalSource,
           status: workerName ? '已派单' : '待派单',
           isUrgent: false,
           creatorName: creatorName,

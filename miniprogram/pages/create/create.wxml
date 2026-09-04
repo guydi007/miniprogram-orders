@@ -44,7 +44,6 @@
         bindinput="onTimeInput" 
         bindblur="onTimeBlur"
       />
-      <!-- 快捷胶囊 -->
       <view class="quick-pill-grid">
         <view class="quick-pill" bindtap="onQuickTime" data-val="今天 早上">当天早上</view>
         <view class="quick-pill" bindtap="onQuickTime" data-val="今天 上午">当天上午</view>
@@ -57,8 +56,8 @@
       </view>
     </view>
 
-    <!-- 4. 指派师傅（仅管理员可见） -->
-    <view class="form-item" wx:if="{{ currentUser && currentUser.role === 'admin' }}">
+    <!-- 4. 指派师傅（仅管理员/管理可见） -->
+    <view class="form-item" wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理') }}">
       <text class="form-label">指派师傅</text>
       <picker bindchange="onWorkerChange" value="{{ workerIndex }}" range="{{ workerNames }}">
         <view class="picker-inner">
@@ -71,15 +70,15 @@
       </picker>
     </view>
 
-    <!-- 5. 订单来源 -->
+    <!-- 5. 订单来源（下拉选择，数据来自 order_sources 集合） -->
     <view class="form-item">
       <text class="form-label">订单来源</text>
-      <input 
-        class="form-input" 
-        placeholder="如：美团、58、抖音、老客户转介绍" 
-        value="{{ source }}" 
-        bindinput="onSourceInput" 
-      />
+      <picker bindchange="onSourceChange" value="{{ sourceIndex }}" range="{{ sourceOptions }}">
+        <view class="picker-inner">
+          <text class="picker-text text-bold">{{ sourceOptions[sourceIndex] || '请选择订单来源' }}</text>
+          <text class="arrow-down">▼</text>
+        </view>
+      </picker>
     </view>
 
     <!-- 6. 初始回馈/备注 -->

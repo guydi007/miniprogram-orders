@@ -403,7 +403,7 @@ page {
   margin-bottom: 20rpx;
 }
 
-.type-btn { flex: 1; text-align: center; font-size: 26rpx; padding: 12rpx 0; border-radius: 8rpx; color: #666666; }
+.type-btn { flex: 1; text-align: center; font-size: 24rpx; padding: 12rpx 0; border-radius: 8rpx; color: #666666; }
 .type-active { background: #ffffff; color: #07c160; font-weight: bold; box-shadow: 0 2rpx 6rpx rgba(0, 0, 0, 0.08); }
 
 .user-manage-item {
@@ -450,4 +450,65 @@ page {
   border-radius: 8rpx !important;
   margin: 0 !important;
   width: auto !important;
+}
+
+/* 渠道管理样式 */
+.source-manage-box {
+  display: flex;
+  flex-direction: column;
+}
+
+.source-list {
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.source-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #f8fafc;
+  padding: 18rpx 20rpx;
+  border-radius: 12rpx;
+  margin-bottom: 12rpx;
+  border: 1rpx solid #eef2f6;
+}
+
+.source-name {
+  font-size: 28rpx;
+  color: #1e293b;
+  font-weight: 500;
+}
+
+.btn-del-source {
+  background-color: #fee2e2 !important;
+  color: #ef4444 !important;
+  font-size: 22rpx !important;
+  padding: 0 16rpx !important;
+  height: 48rpx !important;
+  line-height: 48rpx !important;
+  border-radius: 8rpx !important;
+  margin: 0 !important;
+  width: auto !important;
+}
+
+.add-source-bar {
+  display: flex;
+  gap: 14rpx;
+  align-items: center;
+}
+
+.add-source-input {
+  flex: 1;
+}
+
+.btn-add-source {
+  background: #07c160 !important;
+  color: #ffffff !important;
+  font-size: 26rpx !important;
+  height: 80rpx !important;
+  line-height: 80rpx !important;
+  border-radius: 12rpx !important;
+  padding: 0 30rpx !important;
+  margin: 0 !important;
 }

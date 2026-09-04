@@ -31,7 +31,7 @@ Page({
     inputPhone: '',
 
     showUserManageModal: false,
-    userManageTab: 'list',
+    userManageTab: 'list', // 'list' | 'add' | 'source'
     allUserList: [],
     newUserName: '',
     newUserPhone: '',
@@ -39,7 +39,11 @@ Page({
     newUserIsTest: false,
     newUserGroupId: '',
     newUserCities: ['天津'],
-    newUserCitiesMap: { '天津': true }
+    newUserCitiesMap: { '天津': true },
+
+    // 渠道管理数据
+    allSourceList: [],
+    newSourceName: ''
   },
 
   onLoad() {
@@ -277,7 +281,7 @@ Page({
     }
   },
 
-  // 突破 20 条限制，分页拉取全部工单
+  // 突破 20 条限制，分页查询全部工单
   async fetchOrders() {
     const user = this.data.currentUser;
     if (!user || !user.phone) return;
@@ -405,9 +409,11 @@ Page({
       newUserIsTest: false,
       newUserGroupId: '',
       newUserCities: [defaultCity],
-      newUserCitiesMap: { [defaultCity]: true }
+      newUserCitiesMap: { [defaultCity]: true },
+      newSourceName: ''
     });
     this.fetchAllUsers();
+    this.fetchSources();
   },
 
   closeUserManageModal() {
@@ -438,6 +444,74 @@ Page({
       });
       this.setData({ allUserList: list });
     }).catch(e => console.error(e));
+  },
+
+  // 拉取渠道来源列表
+  fetchSources() {
+    const db = wx.cloud.database();
+    db.collection('order_sources').orderBy('sort', 'asc').get().then(res => {
+      this.setData({ allSourceList: res.data || [] });
+    }).catch(e => console.error('获取渠道列表失败：', e));
+  },
+
+  onNewSourceNameInput(e) {
+    this.setData({ newSourceName: (e.detail.value || '').trim() });
+  },
+
+  // 添加新渠道来源
+  async addSource() {
+    const name = (this.data.newSourceName || '').trim();
+    if (!name) return wx.showToast({ title: '请输入渠道名称', icon: 'none' });
+
+    const exists = this.data.allSourceList.some(s => s.name === name);
+    if (exists) return wx.showToast({ title: '该渠道已存在', icon: 'none' });
+
+    wx.showLoading({ title: '正在添加...' });
+    const db = wx.cloud.database();
+    try {
+      await db.collection('order_sources').add({
+        data: {
+          name: name,
+          sort: Date.now(),
+          enabled: true,
+          createTime: new Date().toISOString()
+        }
+      });
+      wx.hideLoading();
+      wx.showToast({ title: '添加成功', icon: 'success' });
+      this.setData({ newSourceName: '' });
+      this.fetchSources();
+    } catch (err) {
+      console.error('添加渠道失败：', err);
+      wx.hideLoading();
+      wx.showToast({ title: '添加失败，请重试', icon: 'none' });
+    }
+  },
+
+  // 删除渠道来源
+  deleteSource(e) {
+    const { id, name } = e.currentTarget.dataset;
+    wx.showModal({
+      title: '确认删除渠道？',
+      content: `确定要删除【${name}】渠道吗？删除后录单下拉中将不再显示。`,
+      confirmColor: '#e53935',
+      success: async (res) => {
+        if (res.confirm) {
+          wx.showLoading({ title: '正在删除...' });
+          const db = wx.cloud.database();
+          try {
+            await db.collection('order_sources').doc(id).remove();
+            wx.hideLoading();
+            wx.showToast({ title: '已删除', icon: 'success' });
+            this.fetchSources();
+          } catch (err) {
+            console.error(err);
+            wx.hideLoading();
+            wx.showToast({ title: '删除失败', icon: 'none' });
+          }
+        }
+      }
+    });
   },
 
   unbindUserOpenid(e) {

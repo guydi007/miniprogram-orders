@@ -18,7 +18,7 @@
       </view>
     </view>
 
-    <!-- 头部操作区 -->
+    <!-- 头部操作区：将原“👥 员工”平滑升级为“⚙️ 管理” -->
     <view class="header-actions" catchtap="stopBubble">
       <button 
         class="btn-action btn-stats" 
@@ -32,7 +32,7 @@
         wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理') }}" 
         bindtap="openUserManageModal"
       >
-        👥 员工
+        ⚙️ 管理
       </button>
       <button 
         class="btn-action btn-create" 
@@ -165,14 +165,16 @@
     </view>
   </view>
 
-  <!-- 员工管理弹窗 -->
+  <!-- 管理员专属：管理中心弹窗（员工 / 录入 / 渠道） -->
   <view class="modal-mask" wx:if="{{ showUserManageModal }}">
     <view class="modal-box user-manage-modal">
       <view class="type-switch">
-        <view class="type-btn {{ userManageTab === 'list' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="list">👥 员工列表 ({{ allUserList.length }})</view>
-        <view class="type-btn {{ userManageTab === 'add' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="add">➕ 新增员工</view>
+        <view class="type-btn {{ userManageTab === 'list' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="list">👥 员工 ({{ allUserList.length }})</view>
+        <view class="type-btn {{ userManageTab === 'add' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="add">➕ 录入</view>
+        <view class="type-btn {{ userManageTab === 'source' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="source">🏷️ 渠道 ({{ allSourceList.length }})</view>
       </view>
 
+      <!-- Tab 1：员工列表 -->
       <view class="user-list-box" wx:if="{{ userManageTab === 'list' }}">
         <view class="user-manage-item" wx:for="{{ allUserList }}" wx:key="_id">
           <view class="u-info">
@@ -205,6 +207,7 @@
         <view class="empty-stats" wx:if="{{ allUserList.length === 0 }}">暂无员工数据</view>
       </view>
 
+      <!-- Tab 2：录入新员工 -->
       <view class="user-add-box" wx:if="{{ userManageTab === 'add' }}">
         <text class="field-title">员工姓名：</text>
         <input 
@@ -259,6 +262,27 @@
         <view class="test-switch-tip">开启后该账号不绑定任何微信，可在多台手机随时切换登录用于测试。</view>
 
         <button class="btn-primary mt-30" bindtap="submitAddUser">确认录入</button>
+      </view>
+
+      <!-- Tab 3：渠道来源管理 -->
+      <view class="source-manage-box" wx:if="{{ userManageTab === 'source' }}">
+        <view class="source-list">
+          <view class="source-item" wx:for="{{ allSourceList }}" wx:key="_id">
+            <text class="source-name">{{ item.name }}</text>
+            <button class="btn-del-source" size="mini" bindtap="deleteSource" data-id="{{ item._id }}" data-name="{{ item.name }}">删除</button>
+          </view>
+          <view class="empty-stats" wx:if="{{ allSourceList.length === 0 }}">暂无渠道数据</view>
+        </view>
+
+        <view class="add-source-bar mt-20">
+          <input 
+            class="modal-input add-source-input" 
+            placeholder="输入新渠道（如：抖音）" 
+            value="{{ newSourceName }}" 
+            bindinput="onNewSourceNameInput" 
+          />
+          <button class="btn-add-source" bindtap="addSource">添加</button>
+        </view>
       </view>
 
       <view class="modal-btns mt-30">
