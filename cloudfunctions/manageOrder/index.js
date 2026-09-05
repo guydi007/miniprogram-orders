@@ -7,9 +7,9 @@ cloud.init({
 const db = cloud.database();
 
 exports.main = async (event, context) => {
-  const { action, orderId, userId, data } = event;
+  const { action, orderId, orderIds, userId, data } = event;
 
-  // 1. 工单相关所有修改动作
+  // 1. 单个工单修改动作
   if (['cancelOrder', 'updateOrder', 'assignWorker', 'finishOrder', 'editTime', 'feedback', 'urgent'].includes(action)) {
     try {
       const res = await db.collection('orders').doc(orderId).update({
@@ -28,7 +28,30 @@ exports.main = async (event, context) => {
     }
   }
 
-  // 2. 员工账号相关修改动作（编辑城市、群号、解绑微信等）
+  // 🌟 2. 批量指派工单给同一个师傅
+  if (action === 'batchAssignWorker') {
+    try {
+      const ids = orderIds || [];
+      const tasks = ids.map(id => 
+        db.collection('orders').doc(id).update({
+          data: data
+        })
+      );
+      await Promise.all(tasks);
+      return {
+        success: true,
+        updated: ids.length
+      };
+    } catch (err) {
+      console.error('云端批量派单失败：', err);
+      return {
+        success: false,
+        error: err
+      };
+    }
+  }
+
+  // 3. 员工账号相关修改动作
   if (['updateUser', 'unbindUser'].includes(action)) {
     try {
       const res = await db.collection('users').doc(userId).update({

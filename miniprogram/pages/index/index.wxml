@@ -18,8 +18,16 @@
       </view>
     </view>
 
-    <!-- 头部操作区（纯英文判定） -->
+    <!-- 头部操作区 -->
     <view class="header-actions" catchtap="stopBubble">
+      <!-- 🌟 管理员专属：批量派单模式切换开关 -->
+      <button 
+        class="btn-action btn-batch-toggle" 
+        wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
+        bindtap="toggleBatchMode"
+      >
+        {{ isBatchMode ? '退出批量' : '☑️ 批量派单' }}
+      </button>
       <button 
         class="btn-action btn-stats" 
         wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
@@ -91,17 +99,19 @@
     />
   </view>
 
-  <!-- 5. 订单列表 -->
-  <view class="order-list">
+  <!-- 5. 订单列表（支持批量勾选） -->
+  <view class="order-list" style="padding-bottom: {{ isBatchMode ? '140rpx' : '0' }};">
     <view 
       class="order-card" 
       wx:for="{{ filteredOrders }}" 
       wx:key="_id" 
-      bindtap="goToDetail" 
+      bindtap="{{ isBatchMode ? 'onToggleSelectOrder' : 'goToDetail' }}" 
       data-id="{{ item._id }}"
     >
       <view class="card-top">
         <view class="top-left">
+          <!-- 🌟 批量多选复选框 -->
+          <checkbox wx:if="{{ isBatchMode }}" value="{{ item._id }}" checked="{{ selectedOrderMap[item._id] }}" catchtap="stopBubble" catchchange="onCheckboxChange" data-id="{{ item._id }}" style="margin-right: 12rpx;" />
           <text class="city-badge" wx:if="{{ item.city }}">{{ item.city }}</text>
           <text class="time">📅 {{ item.appointmentTime || '待定' }}</text>
         </view>
@@ -137,7 +147,7 @@
 
       <view class="card-footer">
         <text class="feedback-count">💬 回馈 ({{ item.feedbacks ? item.feedbacks.length : 0 }}) · 流水 ({{ item.paymentLogs ? item.paymentLogs.length : (item.finishPhotos ? item.finishPhotos.length : 0) }})</text>
-        <text class="arrow">详情 ➔</text>
+        <text class="arrow">{{ isBatchMode ? (selectedOrderMap[item._id] ? '已勾选 ✓' : '点击勾选') : '详情 ➔' }}</text>
       </view>
     </view>
 
@@ -146,7 +156,22 @@
     </view>
   </view>
 
-  <!-- 6. 手机号核验弹窗 -->
+  <!-- 🌟 6. 底部固定：批量派单操作浮层 -->
+  <view class="batch-action-bar" wx:if="{{ isBatchMode }}">
+    <view class="batch-info">
+      已选 <text class="font-bold font-green">{{ selectedOrderIds.length }}</text> 单
+    </view>
+    <view class="batch-btns">
+      <button class="btn-select-all" size="mini" bindtap="selectAllOrders">全选当前</button>
+      <picker bindchange="onBatchAssignWorker" range="{{ candidateWorkerNames }}" disabled="{{ selectedOrderIds.length === 0 }}">
+        <button class="btn-primary {{ selectedOrderIds.length === 0 ? 'btn-disabled' : '' }}" size="mini">
+          指派给师傅 ➔
+        </button>
+      </picker>
+    </view>
+  </view>
+
+  <!-- 7. 手机号核验弹窗 -->
   <view class="modal-mask" wx:if="{{ showPhoneModal }}">
     <view class="modal-box">
       <view class="modal-title">🔐 员工身份核验</view>
@@ -165,7 +190,7 @@
     </view>
   </view>
 
-  <!-- 7. 管理中心弹窗 -->
+  <!-- 8. 管理中心弹窗 -->
   <view class="modal-mask" wx:if="{{ showUserManageModal }}">
     <view class="modal-box user-manage-modal">
       <view class="type-switch">
@@ -289,7 +314,7 @@
     </view>
   </view>
 
-  <!-- 8. 专属二级弹窗：编辑员工属性与安全解绑 -->
+  <!-- 9. 编辑员工弹窗 -->
   <view class="modal-mask edit-modal-mask" wx:if="{{ showEditUserModal }}">
     <view class="modal-box edit-user-modal">
       <view class="modal-title">✏️ 编辑员工 ({{ editingUser.name }})</view>

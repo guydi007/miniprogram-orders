@@ -15,6 +15,13 @@ Page({
     userVisibleCities: ['天津', '北京'],
     selectedCityFilter: 'all',
 
+    // 🌟 批量派单相关状态
+    isBatchMode: false,
+    selectedOrderMap: {},
+    selectedOrderIds: [],
+    candidateWorkers: [],
+    candidateWorkerNames: ['请选择师傅'],
+
     currentTab: 'all',
     tabList: [
       { key: 'all', label: '全部' },
@@ -33,6 +40,7 @@ Page({
 
     showPhoneModal: false,
     inputPhone: '',
+    isSubmittingPhone: false,
 
     showUserManageModal: false,
     userManageTab: 'list',
@@ -92,9 +100,128 @@ Page({
       }
       this.updateUserVisibleCities();
       this.fetchOrders();
+      if (checkIsAdmin(cachedUser)) {
+        this.fetchCandidateWorkers();
+      }
     } else if (this.data.currentUser) {
       this.updateUserVisibleCities();
       this.fetchOrders();
+      if (checkIsAdmin(this.data.currentUser)) {
+        this.fetchCandidateWorkers();
+      }
+    }
+  },
+
+  // 🌟 拉取所有可用师傅供批量派单选择
+  fetchCandidateWorkers() {
+    const db = wx.cloud.database();
+    db.collection('users').where({ role: 'worker' }).get().then(res => {
+      const workers = res.data || [];
+      this.setData({
+        candidateWorkers: workers,
+        candidateWorkerNames: ['请选择师傅', ...workers.map(w => w.name + (w.groupId ? ` (${w.groupId})` : ''))]
+      });
+    }).catch(e => console.error('拉取师傅列表失败：', e));
+  },
+
+  // 🌟 切换批量派单模式
+  toggleBatchMode() {
+    if (!checkIsAdmin(this.data.currentUser)) {
+      return wx.showToast({ title: '仅限管理员使用批量派单', icon: 'none' });
+    }
+    const nextMode = !this.data.isBatchMode;
+    this.setData({
+      isBatchMode: nextMode,
+      selectedOrderMap: {},
+      selectedOrderIds: []
+    });
+  },
+
+  // 🌟 勾选/取消勾选单个工单
+  onToggleSelectOrder(e) {
+    if (!this.data.isBatchMode) {
+      return this.goToDetail(e);
+    }
+    const id = e.currentTarget.dataset.id;
+    const map = { ...this.data.selectedOrderMap };
+    map[id] = !map[id];
+
+    const ids = [];
+    Object.keys(map).forEach(k => {
+      if (map[k]) ids.push(k);
+    });
+
+    this.setData({
+      selectedOrderMap: map,
+      selectedOrderIds: ids
+    });
+  },
+
+  // 🌟 全选当前过滤下的所有工单
+  selectAllOrders() {
+    const list = this.data.filteredOrders || [];
+    const map = {};
+    const ids = [];
+    list.forEach(o => {
+      map[o._id] = true;
+      ids.push(o._id);
+    });
+    this.setData({
+      selectedOrderMap: map,
+      selectedOrderIds: ids
+    });
+    wx.showToast({ title: `已全选 ${ids.length} 单`, icon: 'none' });
+  },
+
+  // 🌟 执行批量派单（通过 manageOrder 云函数托管）
+  async onBatchAssignWorker(e) {
+    const idx = Number(e.detail.value) - 1; // 减去首项 "请选择师傅"
+    const worker = this.data.candidateWorkers[idx];
+    const orderIds = this.data.selectedOrderIds;
+
+    if (!worker) {
+      return wx.showToast({ title: '请选择有效师傅', icon: 'none' });
+    }
+    if (!orderIds || orderIds.length === 0) {
+      return wx.showToast({ title: '请先勾选需要派单的工单', icon: 'none' });
+    }
+
+    wx.showLoading({ title: `正在批量派单 (${orderIds.length}单)...` });
+
+    const updateData = {
+      workerName: worker.name,
+      workerPhone: worker.phone || '',
+      workerGroupId: worker.groupId || '',
+      status: '已派单'
+    };
+
+    try {
+      const res = await wx.cloud.callFunction({
+        name: 'manageOrder',
+        data: {
+          action: 'batchAssignWorker',
+          orderIds: orderIds,
+          data: updateData
+        }
+      });
+
+      wx.hideLoading();
+      const result = res.result || {};
+      if (result.success) {
+        wx.showToast({ title: `成功派单 ${orderIds.length} 单`, icon: 'success' });
+        this.setData({
+          isBatchMode: false,
+          selectedOrderMap: {},
+          selectedOrderIds: []
+        });
+        this.fetchOrders();
+      } else {
+        wx.showToast({ title: '批量派单失败，请重试', icon: 'none' });
+      }
+    } catch (err) {
+      wx.hideLoading();
+      console.error('批量派单异常：', err);
+      wx.showToast({ title: '网络异常，请重试', icon: 'none' });
     }
   },
 
@@ -160,7 +287,7 @@ Page({
     if (checkIsAdmin(user)) {
       this.setData({ userVisibleCities: all });
     } else if (user.role === 'service') {
-      const myCities = user.cities || [];
+      const myCities = Array.isArray(user.cities) ? user.cities : [];
       const visible = all.filter(c => myCities.includes(c));
       this.setData({ userVisibleCities: visible.length > 0 ? visible : all });
     } else {
@@ -178,6 +305,9 @@ Page({
     }, () => {
       this.updateUserVisibleCities();
       this.fetchOrders();
+      if (checkIsAdmin(user)) {
+        this.fetchCandidateWorkers();
+      }
     });
   },
 
@@ -217,6 +347,7 @@ Page({
                 currentUser: null,
                 orders: [],
                 filteredOrders: [],
+                isBatchMode: false,
                 showPhoneModal: true,
                 inputPhone: ''
               });
@@ -230,7 +361,7 @@ Page({
       if (hasBoundOpenid) {
         return wx.showModal({
           title: '身份已绑定锁定',
-          content: `员工【${dbUser.name}】（${dbUser.phone}）已与当前微信号绑定，禁止切换。如需换号请联系管理员解绑。`,
+          content: `员工【${dbUser.name}】（${dbUser.phone}）已与当前微信号绑定，禁止切换。`,
           showCancel: false,
           confirmText: '我知道了'
         });
@@ -248,11 +379,14 @@ Page({
   },
 
   async verifyAndBindPhone() {
+    if (this.data.isSubmittingPhone) return;
+
     const phone = (this.data.inputPhone || '').trim();
     if (!phone || phone.length < 11) {
       return wx.showToast({ title: '请输入正确的11位手机号', icon: 'none' });
     }
 
+    this.setData({ isSubmittingPhone: true });
     wx.showLoading({ title: '核验登录中...' });
 
     try {
@@ -265,6 +399,7 @@ Page({
       });
 
       wx.hideLoading();
+      this.setData({ isSubmittingPhone: false });
       const result = res.result || {};
 
       if (!result.success) {
@@ -286,6 +421,7 @@ Page({
     } catch (err) {
       console.error('云函数核验异常：', err);
       wx.hideLoading();
+      this.setData({ isSubmittingPhone: false });
       wx.showToast({ title: '网络异常，请重试', icon: 'none' });
     }
   },
@@ -319,7 +455,7 @@ Page({
         allOrders = results.reduce((acc, cur) => acc.concat(cur.data || []), []);
       }
 
-      const userCities = user.cities || [];
+      const userCities = Array.isArray(user.cities) ? user.cities : [];
       let roleFiltered = allOrders;
 
       if (user.role === 'worker') {
@@ -670,96 +806,94 @@ Page({
     });
   },
 
-// 🌟 管理员修改员工所属城市或群号（云函数托管）
-async submitEditUser() {
-  if (!checkIsAdmin(this.data.currentUser)) {
-    return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
-  }
-  const { editingUser, editUserCities, editUserGroupId } = this.data;
-  if (!editingUser) return;
+  async submitEditUser() {
+    if (!checkIsAdmin(this.data.currentUser)) {
+      return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
+    }
+    const { editingUser, editUserCities, editUserGroupId } = this.data;
+    if (!editingUser) return;
 
-  if (!editUserCities || editUserCities.length === 0) {
-    return wx.showToast({ title: '请至少保留一个城市', icon: 'none' });
-  }
+    if (!editUserCities || editUserCities.length === 0) {
+      return wx.showToast({ title: '请至少保留一个城市', icon: 'none' });
+    }
 
-  const isWorker = editingUser.role === 'worker';
-  const updateData = {
-    cities: editUserCities,
-    groupId: isWorker ? editUserGroupId : ''
-  };
+    const isWorker = editingUser.role === 'worker';
+    const updateData = {
+      cities: editUserCities,
+      groupId: isWorker ? editUserGroupId : ''
+    };
 
-  wx.showLoading({ title: '正在保存...' });
+    wx.showLoading({ title: '正在保存...' });
 
-  try {
-    const res = await wx.cloud.callFunction({
-      name: 'manageOrder',
-      data: {
-        action: 'updateUser',
-        userId: editingUser._id,
-        data: updateData
+    try {
+      const res = await wx.cloud.callFunction({
+        name: 'manageOrder',
+        data: {
+          action: 'updateUser',
+          userId: editingUser._id,
+          data: updateData
+        }
+      });
+
+      wx.hideLoading();
+      const result = res.result || {};
+      if (result.success) {
+        wx.showToast({ title: '保存成功', icon: 'success' });
+        this.setData({ showEditUserModal: false });
+        this.fetchAllUsers();
+      } else {
+        wx.showToast({ title: '保存失败，请重试', icon: 'none' });
       }
-    });
-
-    wx.hideLoading();
-    const result = res.result || {};
-    if (result.success) {
-      wx.showToast({ title: '保存成功', icon: 'success' });
-      this.setData({ showEditUserModal: false });
-      this.fetchAllUsers();
-    } else {
+    } catch (err) {
+      console.error('更新员工信息失败：', err);
+      wx.hideLoading();
       wx.showToast({ title: '保存失败，请重试', icon: 'none' });
     }
-  } catch (err) {
-    console.error('更新员工信息失败：', err);
-    wx.hideLoading();
-    wx.showToast({ title: '保存失败，请重试', icon: 'none' });
-  }
-},
+  },
 
-// 🌟 管理员弹窗内安全解绑微信（云函数托管）
-unbindUserInModal() {
-  if (!checkIsAdmin(this.data.currentUser)) {
-    return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
-  }
-  const { editingUser, currentUser } = this.data;
-  if (!editingUser) return;
-
-  if (editingUser._id === currentUser._id) {
-    return wx.showToast({ title: '无法解绑自身账号', icon: 'none' });
-  }
-
-  wx.showModal({
-    title: '确认解绑？',
-    content: `确定解绑员工【${editingUser.name}】的微信号吗？`,
-    confirmColor: '#e53935',
-    success: (res) => {
-      if (res.confirm) {
-        wx.showLoading({ title: '正在解绑...' });
-        wx.cloud.callFunction({
-          name: 'manageOrder',
-          data: {
-            action: 'unbindUser',
-            userId: editingUser._id,
-            data: { openid: '' }
-          }
-        }).then(cRes => {
-          wx.hideLoading();
-          const result = cRes.result || {};
-          if (result.success) {
-            wx.showToast({ title: '解绑成功', icon: 'success' });
-            const updated = { ...editingUser, openid: '' };
-            this.setData({ editingUser: updated });
-            this.fetchAllUsers();
-          } else {
-            wx.showToast({ title: '解绑失败', icon: 'none' });
-          }
-        }).catch(err => {
-          console.error('解绑异常：', err);
-          wx.hideLoading();
-          wx.showToast({ title: '解绑失败，请重试', icon: 'none' });
-        });
-      }
+  unbindUserInModal() {
+    if (!checkIsAdmin(this.data.currentUser)) {
+      return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
     }
-  });
-},
+    const { editingUser, currentUser } = this.data;
+    if (!editingUser) return;
+
+    if (editingUser._id === currentUser._id) {
+      return wx.showToast({ title: '无法解绑自身账号', icon: 'none' });
+    }
+
+    wx.showModal({
+      title: '确认解绑？',
+      content: `确定解绑员工【${editingUser.name}】的微信号吗？`,
+      confirmColor: '#e53935',
+      success: (res) => {
+        if (res.confirm) {
+          wx.showLoading({ title: '正在解绑...' });
+          wx.cloud.callFunction({
+            name: 'manageOrder',
+            data: {
+              action: 'unbindUser',
+              userId: editingUser._id,
+              data: { openid: '' }
+            }
+          }).then(cRes => {
+            wx.hideLoading();
+            const result = cRes.result || {};
+            if (result.success) {
+              wx.showToast({ title: '解绑成功', icon: 'success' });
+              const updated = { ...editingUser, openid: '' };
+              this.setData({ editingUser: updated });
+              this.fetchAllUsers();
+            } else {
+              wx.showToast({ title: '解绑失败', icon: 'none' });
+            }
+          }).catch(err => {
+            console.error('解绑异常：', err);
+            wx.hideLoading();
+            wx.showToast({ title: '解绑失败，请重试', icon: 'none' });
+          });
+        }
+      }
+    });
+  }
 });

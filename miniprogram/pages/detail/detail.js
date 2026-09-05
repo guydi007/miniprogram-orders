@@ -169,7 +169,6 @@ Page({
     }).catch(e => console.error('获取师傅列表失败：', e));
   },
 
-  // 🌟 指派师傅（云函数托管）
   async onAssignWorker(e) {
     const idx = Number(e.detail.value);
     const worker = this.data.candidateWorkers[idx];
@@ -216,7 +215,6 @@ Page({
     }
   },
 
-  // 🌟 催单（云函数托管）
   async triggerUrgent() {
     wx.showLoading({ title: '提交催单...' });
     try {
@@ -270,7 +268,6 @@ Page({
     this.setData({ editTimeInput: formatted });
   },
 
-  // 🌟 改期（云函数托管）
   async submitEditTime() {
     const newTime = parseDateSmart(this.data.editTimeInput);
     const oldTime = this.data.order.appointmentTime || '';
@@ -360,7 +357,6 @@ Page({
     this.setData({ cancelReason: e.detail.value.trim() });
   },
 
-  // 🌟 取消工单（云函数托管）
   async submitCancelOrder() {
     const reason = this.data.cancelReason;
     if (!reason) {
@@ -433,7 +429,6 @@ Page({
     this.setData({ failReason: e.detail.value.trim() });
   },
 
-  // 🌟 师傅未成单归档（云函数托管）
   async submitFailOrder() {
     const reason = this.data.failReason;
     if (!reason) {
@@ -622,7 +617,6 @@ Page({
     });
   },
 
-  // 🌟 师傅全款完工结单/预付款录入（云函数托管，彻底解决师傅结单被拦截问题）
   async submitFinishOrder() {
     const { settleMode, inputCash, inputWechat, inputAlipay, inputTotalAmount, fullTotal, depositTotal, remainTotal, modalCompanions, modalNote, localPhotos, orderId, order, currentUser, initialSnapshot } = this.data;
 
@@ -647,14 +641,15 @@ Page({
 
     if (order && (order.settleType === (settleMode === 'full' ? '全款' : '预付款'))) {
       const snap = initialSnapshot || {};
+      // 🌟 修复点：使用 String() 统一转为字符串格式再比对，彻底解决数字与字符串全等比较误判 Bug
       const isNoChange = (
         localPhotos.length === 0 &&
-        inputCash === snap.cash &&
-        inputWechat === snap.wechat &&
-        inputAlipay === snap.alipay &&
-        (settleMode === 'full' || inputTotalAmount === snap.totalAmount) &&
-        modalCompanions === snap.companions &&
-        modalNote === snap.note
+        String(inputCash) === String(snap.cash || '') &&
+        String(inputWechat) === String(snap.wechat || '') &&
+        String(inputAlipay) === String(snap.alipay || '') &&
+        (settleMode === 'full' || String(inputTotalAmount) === String(snap.totalAmount || '')) &&
+        String(modalCompanions) === String(snap.companions || '') &&
+        String(modalNote) === String(snap.note || '')
       );
 
       if (isNoChange) {
@@ -793,7 +788,6 @@ Page({
     this.setData({ feedbackPhotos: list });
   },
 
-  // 🌟 提交回馈（云函数托管）
   async submitFeedback() {
     const { feedbackContent, feedbackPhotos, orderId, order, currentUser } = this.data;
 
