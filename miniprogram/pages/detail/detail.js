@@ -329,6 +329,7 @@ Page({
     this.setData({ cancelReason: e.detail.value.trim() });
   },
 
+  // 🌟 管理员/客服取消工单（通过 manageOrder 云函数执行，彻底破除 OpenID 限制）
   async submitCancelOrder() {
     const reason = this.data.cancelReason;
     if (!reason) {
@@ -352,26 +353,39 @@ Page({
     const existingFeedbacks = Array.isArray(this.data.order.feedbacks) ? this.data.order.feedbacks : [];
     const updatedFeedbacks = [cancelFeedback, ...existingFeedbacks];
 
-    const db = wx.cloud.database();
+    const updateData = {
+      status: '未成单',
+      cancelReason: reason,
+      cancelOperator: (currentUser && currentUser.name) || '员工',
+      cancelTime: now.toISOString(),
+      feedbacks: updatedFeedbacks
+    };
+
     try {
-      await db.collection('orders').doc(this.data.orderId).update({
+      const res = await wx.cloud.callFunction({
+        name: 'manageOrder',
         data: {
-          status: '未成单',
-          cancelReason: reason,
-          cancelOperator: (currentUser && currentUser.name) || '员工',
-          cancelTime: now.toISOString(),
-          feedbacks: updatedFeedbacks
+          action: 'cancelOrder',
+          orderId: this.data.orderId,
+          data: updateData
         }
       });
 
       wx.hideLoading();
-      this.setData({ showCancelModal: false });
-      wx.showToast({ title: '工单已取消并归档', icon: 'success' });
-      this.fetchOrderDetail(this.data.orderId);
+      const result = res.result || {};
+
+      if (result.success) {
+        this.setData({ showCancelModal: false });
+        wx.showToast({ title: '工单已取消并归档', icon: 'success' });
+        this.fetchOrderDetail(this.data.orderId);
+      } else {
+        console.error('云端取消失败：', result.error);
+        wx.showToast({ title: '取消失败，请重试', icon: 'none' });
+      }
     } catch (err) {
       wx.hideLoading();
-      console.error(err);
-      wx.showToast({ title: '取消失败，请重试', icon: 'none' });
+      console.error('调用取消云函数异常：', err);
+      wx.showToast({ title: '网络异常，请重试', icon: 'none' });
     }
   },
 
@@ -391,7 +405,7 @@ Page({
     this.setData({ failReason: e.detail.value.trim() });
   },
 
-  // 师傅端专属：提交未成单理由并归档
+  // 🌟 师傅端专属：提交未成单理由（同样走 manageOrder 云函数，确保真机100%成功）
   async submitFailOrder() {
     const reason = this.data.failReason;
     if (!reason) {
@@ -415,25 +429,38 @@ Page({
     const existingFeedbacks = Array.isArray(this.data.order.feedbacks) ? this.data.order.feedbacks : [];
     const updatedFeedbacks = [failFeedback, ...existingFeedbacks];
 
-    const db = wx.cloud.database();
+    const updateData = {
+      status: '未成单',
+      failReason: reason,
+      failOperator: (currentUser && currentUser.name) || '师傅',
+      failTime: now.toISOString(),
+      feedbacks: updatedFeedbacks
+    };
+
     try {
-      await db.collection('orders').doc(this.data.orderId).update({
+      const res = await wx.cloud.callFunction({
+        name: 'manageOrder',
         data: {
-          status: '未成单',
-          failReason: reason,
-          failOperator: (currentUser && currentUser.name) || '师傅',
-          failTime: now.toISOString(),
-          feedbacks: updatedFeedbacks
+          action: 'updateOrder',
+          orderId: this.data.orderId,
+          data: updateData
         }
       });
 
       wx.hideLoading();
-      this.setData({ showFailModal: false });
-      wx.showToast({ title: '已归入未成单', icon: 'success' });
-      this.fetchOrderDetail(this.data.orderId);
+      const result = res.result || {};
+
+      if (result.success) {
+        this.setData({ showFailModal: false });
+        wx.showToast({ title: '已归入未成单', icon: 'success' });
+        this.fetchOrderDetail(this.data.orderId);
+      } else {
+        console.error('更新未成单失败：', result.error);
+        wx.showToast({ title: '操作失败，请重试', icon: 'none' });
+      }
     } catch (err) {
       wx.hideLoading();
-      console.error('更新未成单失败：', err);
+      console.error('调用未成单云函数异常：', err);
       wx.showToast({ title: '操作失败，请重试', icon: 'none' });
     }
   },
