@@ -670,78 +670,96 @@ Page({
     });
   },
 
-  async submitEditUser() {
-    if (!checkIsAdmin(this.data.currentUser)) {
-      return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
-    }
-    const { editingUser, editUserCities, editUserGroupId } = this.data;
-    if (!editingUser) return;
+// 🌟 管理员修改员工所属城市或群号（云函数托管）
+async submitEditUser() {
+  if (!checkIsAdmin(this.data.currentUser)) {
+    return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
+  }
+  const { editingUser, editUserCities, editUserGroupId } = this.data;
+  if (!editingUser) return;
 
-    if (!editUserCities || editUserCities.length === 0) {
-      return wx.showToast({ title: '请至少保留一个城市', icon: 'none' });
-    }
+  if (!editUserCities || editUserCities.length === 0) {
+    return wx.showToast({ title: '请至少保留一个城市', icon: 'none' });
+  }
 
-    const isWorker = editingUser.role === 'worker';
-    const updateData = {
-      cities: editUserCities,
-      groupId: isWorker ? editUserGroupId : ''
-    };
+  const isWorker = editingUser.role === 'worker';
+  const updateData = {
+    cities: editUserCities,
+    groupId: isWorker ? editUserGroupId : ''
+  };
 
-    wx.showLoading({ title: '正在保存...' });
-    const db = wx.cloud.database();
+  wx.showLoading({ title: '正在保存...' });
 
-    try {
-      await db.collection('users').doc(editingUser._id).update({
+  try {
+    const res = await wx.cloud.callFunction({
+      name: 'manageOrder',
+      data: {
+        action: 'updateUser',
+        userId: editingUser._id,
         data: updateData
-      });
+      }
+    });
 
-      wx.hideLoading();
+    wx.hideLoading();
+    const result = res.result || {};
+    if (result.success) {
       wx.showToast({ title: '保存成功', icon: 'success' });
       this.setData({ showEditUserModal: false });
       this.fetchAllUsers();
-    } catch (err) {
-      console.error('更新员工信息失败：', err);
-      wx.hideLoading();
+    } else {
       wx.showToast({ title: '保存失败，请重试', icon: 'none' });
     }
-  },
+  } catch (err) {
+    console.error('更新员工信息失败：', err);
+    wx.hideLoading();
+    wx.showToast({ title: '保存失败，请重试', icon: 'none' });
+  }
+},
 
-  unbindUserInModal() {
-    if (!checkIsAdmin(this.data.currentUser)) {
-      return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
-    }
-    const { editingUser, currentUser } = this.data;
-    if (!editingUser) return;
+// 🌟 管理员弹窗内安全解绑微信（云函数托管）
+unbindUserInModal() {
+  if (!checkIsAdmin(this.data.currentUser)) {
+    return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
+  }
+  const { editingUser, currentUser } = this.data;
+  if (!editingUser) return;
 
-    if (editingUser._id === currentUser._id) {
-      return wx.showToast({ title: '无法解绑自身账号', icon: 'none' });
-    }
+  if (editingUser._id === currentUser._id) {
+    return wx.showToast({ title: '无法解绑自身账号', icon: 'none' });
+  }
 
-    wx.showModal({
-      title: '确认解绑？',
-      content: `确定解绑员工【${editingUser.name}】的微信号吗？`,
-      confirmColor: '#e53935',
-      success: async (res) => {
-        if (res.confirm) {
-          wx.showLoading({ title: '正在解绑...' });
-          const db = wx.cloud.database();
-          try {
-            await db.collection('users').doc(editingUser._id).update({
-              data: { openid: '' }
-            });
-            wx.hideLoading();
+  wx.showModal({
+    title: '确认解绑？',
+    content: `确定解绑员工【${editingUser.name}】的微信号吗？`,
+    confirmColor: '#e53935',
+    success: (res) => {
+      if (res.confirm) {
+        wx.showLoading({ title: '正在解绑...' });
+        wx.cloud.callFunction({
+          name: 'manageOrder',
+          data: {
+            action: 'unbindUser',
+            userId: editingUser._id,
+            data: { openid: '' }
+          }
+        }).then(cRes => {
+          wx.hideLoading();
+          const result = cRes.result || {};
+          if (result.success) {
             wx.showToast({ title: '解绑成功', icon: 'success' });
-            
             const updated = { ...editingUser, openid: '' };
             this.setData({ editingUser: updated });
             this.fetchAllUsers();
-          } catch (err) {
-            console.error('解绑失败：', err);
-            wx.hideLoading();
-            wx.showToast({ title: '解绑失败，请重试', icon: 'none' });
+          } else {
+            wx.showToast({ title: '解绑失败', icon: 'none' });
           }
-        }
+        }).catch(err => {
+          console.error('解绑异常：', err);
+          wx.hideLoading();
+          wx.showToast({ title: '解绑失败，请重试', icon: 'none' });
+        });
       }
-    });
-  }
+    }
+  });
+},
 });

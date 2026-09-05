@@ -169,6 +169,7 @@ Page({
     }).catch(e => console.error('获取师傅列表失败：', e));
   },
 
+  // 🌟 指派师傅（云函数托管）
   async onAssignWorker(e) {
     const idx = Number(e.detail.value);
     const worker = this.data.candidateWorkers[idx];
@@ -177,28 +178,35 @@ Page({
     }
 
     wx.showLoading({ title: '正在指派师傅...' });
-    const db = wx.cloud.database();
+    const updateData = {
+      workerName: worker.name,
+      workerPhone: worker.phone || '',
+      workerGroupId: worker.groupId || '',
+      status: '已派单'
+    };
 
     try {
-      await db.collection('orders').doc(this.data.orderId).update({
+      const res = await wx.cloud.callFunction({
+        name: 'manageOrder',
         data: {
-          workerName: worker.name,
-          workerPhone: worker.phone || '',
-          workerGroupId: worker.groupId || '',
-          status: '已派单'
+          action: 'assignWorker',
+          orderId: this.data.orderId,
+          data: updateData
         }
       });
+
       wx.hideLoading();
-      wx.showToast({ title: '指派成功', icon: 'success' });
-      this.fetchOrderDetail(this.data.orderId);
+      const result = res.result || {};
+      if (result.success) {
+        wx.showToast({ title: '指派成功', icon: 'success' });
+        this.fetchOrderDetail(this.data.orderId);
+      } else {
+        wx.showToast({ title: '指派失败，请重试', icon: 'none' });
+      }
     } catch (err) {
       wx.hideLoading();
-      console.error('指派失败：', err);
-      wx.showModal({
-        title: '指派失败',
-        content: '更新被拦截，请确保已配置权限。',
-        showCancel: false
-      });
+      console.error('指派异常：', err);
+      wx.showToast({ title: '网络异常，请重试', icon: 'none' });
     }
   },
 
@@ -208,19 +216,32 @@ Page({
     }
   },
 
-  triggerUrgent() {
+  // 🌟 催单（云函数托管）
+  async triggerUrgent() {
     wx.showLoading({ title: '提交催单...' });
-    const db = wx.cloud.database();
-    db.collection('orders').doc(this.data.orderId).update({
-      data: { isUrgent: true }
-    }).then(() => {
+    try {
+      const res = await wx.cloud.callFunction({
+        name: 'manageOrder',
+        data: {
+          action: 'urgent',
+          orderId: this.data.orderId,
+          data: { isUrgent: true }
+        }
+      });
+
       wx.hideLoading();
-      wx.showToast({ title: '已标记紧急催单', icon: 'success' });
-      this.fetchOrderDetail(this.data.orderId);
-    }).catch(e => {
+      const result = res.result || {};
+      if (result.success) {
+        wx.showToast({ title: '已标记紧急催单', icon: 'success' });
+        this.fetchOrderDetail(this.data.orderId);
+      } else {
+        wx.showToast({ title: '催单失败', icon: 'none' });
+      }
+    } catch (e) {
       wx.hideLoading();
       console.error(e);
-    });
+      wx.showToast({ title: '网络异常', icon: 'none' });
+    }
   },
 
   openEditTimeModal() {
@@ -249,6 +270,7 @@ Page({
     this.setData({ editTimeInput: formatted });
   },
 
+  // 🌟 改期（云函数托管）
   async submitEditTime() {
     const newTime = parseDateSmart(this.data.editTimeInput);
     const oldTime = this.data.order.appointmentTime || '';
@@ -291,20 +313,31 @@ Page({
     const existingFeedbacks = Array.isArray(this.data.order.feedbacks) ? this.data.order.feedbacks : [];
     const updatedFeedbacks = [changeFeedback, ...existingFeedbacks];
 
-    const db = wx.cloud.database();
+    const updateData = {
+      appointmentTime: newTime,
+      appointmentLogs: updatedLogs,
+      feedbacks: updatedFeedbacks
+    };
+
     try {
-      await db.collection('orders').doc(this.data.orderId).update({
+      const res = await wx.cloud.callFunction({
+        name: 'manageOrder',
         data: {
-          appointmentTime: newTime,
-          appointmentLogs: updatedLogs,
-          feedbacks: updatedFeedbacks
+          action: 'editTime',
+          orderId: this.data.orderId,
+          data: updateData
         }
       });
 
       wx.hideLoading();
-      this.setData({ showEditTimeModal: false });
-      wx.showToast({ title: '改期成功！', icon: 'success' });
-      this.fetchOrderDetail(this.data.orderId);
+      const result = res.result || {};
+      if (result.success) {
+        this.setData({ showEditTimeModal: false });
+        wx.showToast({ title: '改期成功！', icon: 'success' });
+        this.fetchOrderDetail(this.data.orderId);
+      } else {
+        wx.showToast({ title: '改期失败，请重试', icon: 'none' });
+      }
     } catch (err) {
       wx.hideLoading();
       console.error(err);
@@ -327,6 +360,7 @@ Page({
     this.setData({ cancelReason: e.detail.value.trim() });
   },
 
+  // 🌟 取消工单（云函数托管）
   async submitCancelOrder() {
     const reason = this.data.cancelReason;
     if (!reason) {
@@ -370,18 +404,16 @@ Page({
 
       wx.hideLoading();
       const result = res.result || {};
-
       if (result.success) {
         this.setData({ showCancelModal: false });
         wx.showToast({ title: '工单已取消并归档', icon: 'success' });
         this.fetchOrderDetail(this.data.orderId);
       } else {
-        console.error('云端取消失败：', result.error);
         wx.showToast({ title: '取消失败，请重试', icon: 'none' });
       }
     } catch (err) {
       wx.hideLoading();
-      console.error('调用取消云函数异常：', err);
+      console.error(err);
       wx.showToast({ title: '网络异常，请重试', icon: 'none' });
     }
   },
@@ -401,6 +433,7 @@ Page({
     this.setData({ failReason: e.detail.value.trim() });
   },
 
+  // 🌟 师傅未成单归档（云函数托管）
   async submitFailOrder() {
     const reason = this.data.failReason;
     if (!reason) {
@@ -444,18 +477,16 @@ Page({
 
       wx.hideLoading();
       const result = res.result || {};
-
       if (result.success) {
         this.setData({ showFailModal: false });
         wx.showToast({ title: '已归入未成单', icon: 'success' });
         this.fetchOrderDetail(this.data.orderId);
       } else {
-        console.error('更新未成单失败：', result.error);
         wx.showToast({ title: '操作失败，请重试', icon: 'none' });
       }
     } catch (err) {
       wx.hideLoading();
-      console.error('调用未成单云函数异常：', err);
+      console.error(err);
       wx.showToast({ title: '操作失败，请重试', icon: 'none' });
     }
   },
@@ -591,6 +622,7 @@ Page({
     });
   },
 
+  // 🌟 师傅全款完工结单/预付款录入（云函数托管，彻底解决师傅结单被拦截问题）
   async submitFinishOrder() {
     const { settleMode, inputCash, inputWechat, inputAlipay, inputTotalAmount, fullTotal, depositTotal, remainTotal, modalCompanions, modalNote, localPhotos, orderId, order, currentUser, initialSnapshot } = this.data;
 
@@ -695,16 +727,27 @@ Page({
       }
 
       wx.showLoading({ title: '正在保存并留痕...' });
-      const db = wx.cloud.database();
-      await db.collection('orders').doc(orderId).update({ data: updateData });
+      const res = await wx.cloud.callFunction({
+        name: 'manageOrder',
+        data: {
+          action: 'finishOrder',
+          orderId: orderId,
+          data: updateData
+        }
+      });
 
       wx.hideLoading();
-      this.setData({ showFinishModal: false });
-      wx.showToast({
-        title: settleMode === 'full' ? '全款结单已留痕！' : '预付定金已留痕！',
-        icon: 'success'
-      });
-      this.fetchOrderDetail(orderId);
+      const result = res.result || {};
+      if (result.success) {
+        this.setData({ showFinishModal: false });
+        wx.showToast({
+          title: settleMode === 'full' ? '全款结单已留痕！' : '预付定金已留痕！',
+          icon: 'success'
+        });
+        this.fetchOrderDetail(orderId);
+      } else {
+        wx.showToast({ title: '保存失败，请重试', icon: 'none' });
+      }
     } catch (err) {
       console.error(err);
       wx.hideLoading();
@@ -750,6 +793,7 @@ Page({
     this.setData({ feedbackPhotos: list });
   },
 
+  // 🌟 提交回馈（云函数托管）
   async submitFeedback() {
     const { feedbackContent, feedbackPhotos, orderId, order, currentUser } = this.data;
 
@@ -785,15 +829,24 @@ Page({
       const existingFeedbacks = Array.isArray(order.feedbacks) ? order.feedbacks : [];
       const updatedFeedbacks = [newFeedback, ...existingFeedbacks];
 
-      const db = wx.cloud.database();
-      await db.collection('orders').doc(orderId).update({
-        data: { feedbacks: updatedFeedbacks }
+      const res = await wx.cloud.callFunction({
+        name: 'manageOrder',
+        data: {
+          action: 'feedback',
+          orderId: orderId,
+          data: { feedbacks: updatedFeedbacks }
+        }
       });
 
       wx.hideLoading();
-      this.setData({ showFeedbackModal: false });
-      wx.showToast({ title: '回馈已提交！', icon: 'success' });
-      this.fetchOrderDetail(orderId);
+      const result = res.result || {};
+      if (result.success) {
+        this.setData({ showFeedbackModal: false });
+        wx.showToast({ title: '回馈已提交！', icon: 'success' });
+        this.fetchOrderDetail(orderId);
+      } else {
+        wx.showToast({ title: '提交回馈失败', icon: 'none' });
+      }
     } catch (err) {
       console.error(err);
       wx.hideLoading();
