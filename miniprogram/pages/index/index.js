@@ -1,5 +1,9 @@
 const app = getApp();
 
+function checkIsAdmin(user) {
+  return Boolean(user && user.role === 'admin');
+}
+
 Page({
   data: {
     currentUser: null,
@@ -31,7 +35,7 @@ Page({
     inputPhone: '',
 
     showUserManageModal: false,
-    userManageTab: 'list', // 'list' | 'add' | 'source'
+    userManageTab: 'list',
     allUserList: [],
     newUserName: '',
     newUserPhone: '',
@@ -41,9 +45,14 @@ Page({
     newUserCities: ['天津'],
     newUserCitiesMap: { '天津': true },
 
-    // 渠道管理数据
     allSourceList: [],
-    newSourceName: ''
+    newSourceName: '',
+
+    showEditUserModal: false,
+    editingUser: null,
+    editUserCities: [],
+    editUserCitiesMap: {},
+    editUserGroupId: ''
   },
 
   onLoad() {
@@ -148,9 +157,9 @@ Page({
     const all = this.data.availableCities;
     if (!user) return;
 
-    if (user.role === 'admin' || user.role === '管理') {
+    if (checkIsAdmin(user)) {
       this.setData({ userVisibleCities: all });
-    } else if (user.role === 'service' || user.role === '客服') {
+    } else if (user.role === 'service') {
       const myCities = user.cities || [];
       const visible = all.filter(c => myCities.includes(c));
       this.setData({ userVisibleCities: visible.length > 0 ? visible : all });
@@ -194,7 +203,7 @@ Page({
       wx.hideLoading();
       const dbUser = res.data || user;
 
-      if (dbUser.isTest === true || dbUser.role === 'admin' || dbUser.role === '管理') {
+      if (dbUser.isTest === true || checkIsAdmin(dbUser)) {
         wx.showModal({
           title: '退出 / 更换账号',
           content: `当前为【${dbUser.name}】${dbUser.isTest ? '（测试免锁账号）' : ''}，确定退出并登录其他账号吗？`,
@@ -281,7 +290,6 @@ Page({
     }
   },
 
-  // 突破 20 条限制，分页查询全部工单
   async fetchOrders() {
     const user = this.data.currentUser;
     if (!user || !user.phone) return;
@@ -314,11 +322,11 @@ Page({
       const userCities = user.cities || [];
       let roleFiltered = allOrders;
 
-      if (user.role === 'worker' || user.role === '师傅') {
+      if (user.role === 'worker') {
         roleFiltered = allOrders.filter(o => 
           o.workerName === user.name && (!o.city || userCities.includes(o.city))
         );
-      } else if (user.role === 'service' || user.role === '客服') {
+      } else if (user.role === 'service') {
         roleFiltered = allOrders.filter(o => 
           !o.city || userCities.includes(o.city)
         );
@@ -338,7 +346,7 @@ Page({
     const { orders, currentTab, searchKey, selectedCityFilter, currentUser } = this.data;
     let list = [...orders];
 
-    if (currentUser && (currentUser.role === 'admin' || currentUser.role === '管理' || currentUser.role === 'service' || currentUser.role === '客服') && selectedCityFilter !== 'all') {
+    if (currentUser && (checkIsAdmin(currentUser) || currentUser.role === 'service') && selectedCityFilter !== 'all') {
       list = list.filter(o => o.city === selectedCityFilter);
     }
 
@@ -399,6 +407,9 @@ Page({
   },
 
   openUserManageModal() {
+    if (!checkIsAdmin(this.data.currentUser)) {
+      return wx.showToast({ title: '仅限管理员访问', icon: 'none' });
+    }
     const defaultCity = this.data.availableCities[0] || '天津';
     this.setData({
       showUserManageModal: true,
@@ -446,7 +457,6 @@ Page({
     }).catch(e => console.error(e));
   },
 
-  // 拉取渠道来源列表
   fetchSources() {
     const db = wx.cloud.database();
     db.collection('order_sources').orderBy('sort', 'asc').get().then(res => {
@@ -458,8 +468,10 @@ Page({
     this.setData({ newSourceName: (e.detail.value || '').trim() });
   },
 
-  // 添加新渠道来源
   async addSource() {
+    if (!checkIsAdmin(this.data.currentUser)) {
+      return wx.showToast({ title: '无权操作', icon: 'none' });
+    }
     const name = (this.data.newSourceName || '').trim();
     if (!name) return wx.showToast({ title: '请输入渠道名称', icon: 'none' });
 
@@ -488,12 +500,14 @@ Page({
     }
   },
 
-  // 删除渠道来源
   deleteSource(e) {
+    if (!checkIsAdmin(this.data.currentUser)) {
+      return wx.showToast({ title: '无权操作', icon: 'none' });
+    }
     const { id, name } = e.currentTarget.dataset;
     wx.showModal({
       title: '确认删除渠道？',
-      content: `确定要删除【${name}】渠道吗？删除后录单下拉中将不再显示。`,
+      content: `确定要删除【${name}】渠道吗？`,
       confirmColor: '#e53935',
       success: async (res) => {
         if (res.confirm) {
@@ -508,33 +522,6 @@ Page({
             console.error(err);
             wx.hideLoading();
             wx.showToast({ title: '删除失败', icon: 'none' });
-          }
-        }
-      }
-    });
-  },
-
-  unbindUserOpenid(e) {
-    const { id, name } = e.currentTarget.dataset;
-    wx.showModal({
-      title: '确认解绑微信号？',
-      content: `解绑后，员工【${name}】的微信号将清空，可重新绑定新微信号。`,
-      confirmColor: '#e53935',
-      success: async (res) => {
-        if (res.confirm) {
-          wx.showLoading({ title: '正在解绑...' });
-          const db = wx.cloud.database();
-          try {
-            await db.collection('users').doc(id).update({
-              data: { openid: '' }
-            });
-            wx.hideLoading();
-            wx.showToast({ title: '已成功解绑', icon: 'success' });
-            this.fetchAllUsers();
-          } catch (err) {
-            console.error(err);
-            wx.hideLoading();
-            wx.showToast({ title: '解绑失败', icon: 'none' });
           }
         }
       }
@@ -572,6 +559,9 @@ Page({
   },
 
   async submitAddUser() {
+    if (!checkIsAdmin(this.data.currentUser)) {
+      return wx.showToast({ title: '无权操作', icon: 'none' });
+    }
     const name = (this.data.newUserName || '').trim();
     const phone = (this.data.newUserPhone || '').trim();
     const role = this.data.newUserRole || 'worker';
@@ -591,7 +581,7 @@ Page({
       if (checkRes.data && checkRes.data.length > 0) {
         wx.hideLoading();
         const existing = checkRes.data[0];
-        const existingRole = (existing.role === 'admin' || existing.role === '管理') ? '管理' : ((existing.role === 'service' || existing.role === '客服') ? '客服' : '师傅');
+        const existingRole = existing.role === 'admin' ? '管理' : (existing.role === 'service' ? '客服' : '师傅');
         return wx.showModal({
           title: '手机号冲突',
           content: `该手机号已被【${existing.name || '员工'}】（${existingRole}）占用！不可重复录入。`,
@@ -604,7 +594,7 @@ Page({
         phone: phone,
         role: role,
         cities: cities,
-        groupId: (role === 'worker' || role === '师傅') ? groupId : '',
+        groupId: role === 'worker' ? groupId : '',
         isTest: isTest,
         openid: '',
         createTime: new Date().toISOString()
@@ -631,5 +621,127 @@ Page({
       wx.hideLoading();
       wx.showToast({ title: '录入失败，请重试', icon: 'none' });
     }
+  },
+
+  openEditUserModal(e) {
+    if (!checkIsAdmin(this.data.currentUser)) {
+      return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
+    }
+    const user = e.currentTarget.dataset.user;
+    if (!user) return;
+
+    let citiesArr = [];
+    if (Array.isArray(user.cities)) citiesArr = user.cities;
+    else if (user.cities && typeof user.cities === 'object') citiesArr = Object.values(user.cities);
+    else if (typeof user.cities === 'string' && user.cities) citiesArr = [user.cities];
+
+    const map = {};
+    citiesArr.forEach(c => { map[c] = true; });
+
+    this.setData({
+      showEditUserModal: true,
+      editingUser: user,
+      editUserCities: citiesArr,
+      editUserCitiesMap: map,
+      editUserGroupId: user.groupId || ''
+    });
+  },
+
+  closeEditUserModal() {
+    this.setData({
+      showEditUserModal: false,
+      editingUser: null
+    });
+  },
+
+  onEditUserCitiesChange(e) {
+    const selected = e.detail.value || [];
+    const map = {};
+    selected.forEach(c => { map[c] = true; });
+    this.setData({
+      editUserCities: selected,
+      editUserCitiesMap: map
+    });
+  },
+
+  onEditUserGroupIdInput(e) {
+    this.setData({
+      editUserGroupId: (e.detail.value || '').trim()
+    });
+  },
+
+  async submitEditUser() {
+    if (!checkIsAdmin(this.data.currentUser)) {
+      return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
+    }
+    const { editingUser, editUserCities, editUserGroupId } = this.data;
+    if (!editingUser) return;
+
+    if (!editUserCities || editUserCities.length === 0) {
+      return wx.showToast({ title: '请至少保留一个城市', icon: 'none' });
+    }
+
+    const isWorker = editingUser.role === 'worker';
+    const updateData = {
+      cities: editUserCities,
+      groupId: isWorker ? editUserGroupId : ''
+    };
+
+    wx.showLoading({ title: '正在保存...' });
+    const db = wx.cloud.database();
+
+    try {
+      await db.collection('users').doc(editingUser._id).update({
+        data: updateData
+      });
+
+      wx.hideLoading();
+      wx.showToast({ title: '保存成功', icon: 'success' });
+      this.setData({ showEditUserModal: false });
+      this.fetchAllUsers();
+    } catch (err) {
+      console.error('更新员工信息失败：', err);
+      wx.hideLoading();
+      wx.showToast({ title: '保存失败，请重试', icon: 'none' });
+    }
+  },
+
+  unbindUserInModal() {
+    if (!checkIsAdmin(this.data.currentUser)) {
+      return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
+    }
+    const { editingUser, currentUser } = this.data;
+    if (!editingUser) return;
+
+    if (editingUser._id === currentUser._id) {
+      return wx.showToast({ title: '无法解绑自身账号', icon: 'none' });
+    }
+
+    wx.showModal({
+      title: '确认解绑？',
+      content: `确定解绑员工【${editingUser.name}】的微信号吗？`,
+      confirmColor: '#e53935',
+      success: async (res) => {
+        if (res.confirm) {
+          wx.showLoading({ title: '正在解绑...' });
+          const db = wx.cloud.database();
+          try {
+            await db.collection('users').doc(editingUser._id).update({
+              data: { openid: '' }
+            });
+            wx.hideLoading();
+            wx.showToast({ title: '解绑成功', icon: 'success' });
+            
+            const updated = { ...editingUser, openid: '' };
+            this.setData({ editingUser: updated });
+            this.fetchAllUsers();
+          } catch (err) {
+            console.error('解绑失败：', err);
+            wx.hideLoading();
+            wx.showToast({ title: '解绑失败，请重试', icon: 'none' });
+          }
+        }
+      }
+    });
   }
 });

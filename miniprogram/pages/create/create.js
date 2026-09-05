@@ -36,7 +36,6 @@ Page({
     address: '',
     appointmentTime: '',
 
-    // 来源下拉数据，带智能兜底
     sourceOptions: ['悦乐居', '津窗修', '窗匠', '京窗修', '窗暖家'],
     sourceIndex: 0,
     source: '悦乐居',
@@ -49,7 +48,7 @@ Page({
     let allCities = wx.getStorageSync('availableCities') || (app.globalData && app.globalData.availableCities) || ['天津', '北京'];
 
     let permitted = allCities;
-    if (user && user.role !== 'admin' && user.role !== '管理' && user.cities && user.cities.length) {
+    if (user && user.role !== 'admin' && user.cities && user.cities.length) {
       permitted = allCities.filter(c => user.cities.includes(c));
     }
     if (!permitted.length) permitted = ['天津'];
@@ -60,14 +59,13 @@ Page({
       cityIndex: 0
     });
 
-    if (user && (user.role === 'admin' || user.role === '管理')) {
+    if (user && user.role === 'admin') {
       this.fetchWorkers();
     }
 
     this.fetchSources();
   },
 
-  // 动态从数据库拉取启用的渠道
   async fetchSources() {
     const db = wx.cloud.database();
     try {
@@ -95,10 +93,9 @@ Page({
 
   async fetchWorkers() {
     const db = wx.cloud.database();
-    const _ = db.command;
     try {
       const res = await db.collection('users').where({
-        role: _.in(['worker', '师傅'])
+        role: 'worker'
       }).get();
       const workers = res.data || [];
       this.setData({ allWorkers: workers }, () => {
@@ -136,7 +133,7 @@ Page({
 
   onCityChange(e) {
     this.setData({ cityIndex: Number(e.detail.value) }, () => {
-      if (this.data.currentUser && (this.data.currentUser.role === 'admin' || this.data.currentUser.role === '管理')) {
+      if (this.data.currentUser && this.data.currentUser.role === 'admin') {
         this.filterWorkersByCity();
       }
     });
@@ -219,7 +216,7 @@ Page({
     let workerPhone = '';
     let workerGroupId = '';
 
-    const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === '管理');
+    const isAdmin = currentUser && currentUser.role === 'admin';
     if (isAdmin && workerIndex > 0) {
       const cleanCity = (currentCity || '').trim();
       const matchWorkers = this.data.allWorkers.filter(w => {
@@ -244,7 +241,7 @@ Page({
 
     const creatorName = (currentUser && currentUser.name) || '员工';
     const creatorPhone = (currentUser && currentUser.phone) || '';
-    const creatorRole = (currentUser && currentUser.role) || '';
+    const creatorRole = (currentUser && currentUser.role) || 'service';
 
     const initialFeedbacks = [];
     if (initialFeedback) {

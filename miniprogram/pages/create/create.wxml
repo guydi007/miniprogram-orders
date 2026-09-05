@@ -56,8 +56,8 @@
       </view>
     </view>
 
-    <!-- 4. 指派师傅（仅管理员/管理可见） -->
-    <view class="form-item" wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理') }}">
+    <!-- 4. 指派师傅（严格纯英文 admin 可见） -->
+    <view class="form-item" wx:if="{{ currentUser && currentUser.role === 'admin' }}">
       <text class="form-label">指派师傅</text>
       <picker bindchange="onWorkerChange" value="{{ workerIndex }}" range="{{ workerNames }}">
         <view class="picker-inner">
@@ -70,7 +70,7 @@
       </picker>
     </view>
 
-    <!-- 5. 订单来源（下拉选择，数据来自 order_sources 集合） -->
+    <!-- 5. 订单来源 -->
     <view class="form-item">
       <text class="form-label">订单来源</text>
       <picker bindchange="onSourceChange" value="{{ sourceIndex }}" range="{{ sourceOptions }}">

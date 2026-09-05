@@ -49,7 +49,6 @@ Page({
     showCancelModal: false,
     cancelReason: '',
 
-    // 师傅未成单弹窗状态
     showFailModal: false,
     failReason: '',
 
@@ -129,7 +128,7 @@ Page({
       this.setData({ order: order });
 
       const user = this.data.currentUser;
-      if (user && (user.role === 'admin' || user.role === '管理')) {
+      if (user && user.role === 'admin') {
         this.fetchCandidateWorkers(order.city);
       }
     }).catch(err => {
@@ -141,10 +140,9 @@ Page({
 
   fetchCandidateWorkers(city) {
     const db = wx.cloud.database();
-    const _ = db.command;
 
     db.collection('users').where({
-      role: _.in(['worker', '师傅'])
+      role: 'worker'
     }).get().then(res => {
       const all = res.data || [];
       const cleanCity = (city || '').trim();
@@ -198,7 +196,7 @@ Page({
       console.error('指派失败：', err);
       wx.showModal({
         title: '指派失败',
-        content: '数据更新被拒绝，请确认云控制台 orders 集合权限已设为“所有用户可读写”。',
+        content: '更新被拦截，请确保已配置权限。',
         showCancel: false
       });
     }
@@ -329,7 +327,6 @@ Page({
     this.setData({ cancelReason: e.detail.value.trim() });
   },
 
-  // 🌟 管理员/客服取消工单（通过 manageOrder 云函数执行，彻底破除 OpenID 限制）
   async submitCancelOrder() {
     const reason = this.data.cancelReason;
     if (!reason) {
@@ -345,7 +342,7 @@ Page({
       time: now.toISOString(),
       timeFormatted: formatDateTime(now),
       operatorName: (currentUser && currentUser.name) || '员工',
-      operatorRole: (currentUser && currentUser.role) || 'service',
+      operatorRole: (currentUser && currentUser.role) || 'admin',
       content: `[工单取消] 理由：${reason}`,
       photos: []
     };
@@ -389,7 +386,6 @@ Page({
     }
   },
 
-  // 师傅端专属：打开未成单理由弹窗
   openFailModal() {
     this.setData({
       showFailModal: true,
@@ -405,7 +401,6 @@ Page({
     this.setData({ failReason: e.detail.value.trim() });
   },
 
-  // 🌟 师傅端专属：提交未成单理由（同样走 manageOrder 云函数，确保真机100%成功）
   async submitFailOrder() {
     const reason = this.data.failReason;
     if (!reason) {

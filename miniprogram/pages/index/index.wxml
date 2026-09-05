@@ -6,7 +6,7 @@
       <view class="user-detail">
         <view class="name-row">
           <text class="user-name">{{ currentUser.name || '未认证员工' }}</text>
-          <text class="role-badge role-{{ currentUser.role || 'unbound' }}">{{ (currentUser.role === 'admin' || currentUser.role === '管理') ? '管理' : ((currentUser.role === 'service' || currentUser.role === '客服') ? '客服' : ((currentUser.role === 'worker' || currentUser.role === '师傅') ? '师傅' : '待核验')) }}</text>
+          <text class="role-badge role-{{ currentUser.role || 'unbound' }}">{{ currentUser.role === 'admin' ? '管理' : (currentUser.role === 'service' ? '客服' : (currentUser.role === 'worker' ? '师傅' : '待核验')) }}</text>
           <text class="test-icon-badge" wx:if="{{ currentUser.isTest }}">🧪</text>
         </view>
         <view class="sub-info-row">
@@ -18,25 +18,25 @@
       </view>
     </view>
 
-    <!-- 头部操作区：将原“👥 员工”平滑升级为“⚙️ 管理” -->
+    <!-- 头部操作区（纯英文判定） -->
     <view class="header-actions" catchtap="stopBubble">
       <button 
         class="btn-action btn-stats" 
-        wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理') }}" 
+        wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
         bindtap="goToStats"
       >
         📊 营收
       </button>
       <button 
         class="btn-action btn-add-user" 
-        wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理') }}" 
+        wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
         bindtap="openUserManageModal"
       >
         ⚙️ 管理
       </button>
       <button 
         class="btn-action btn-create" 
-        wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理' || currentUser.role === 'service' || currentUser.role === '客服') }}" 
+        wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === 'service') }}" 
         bindtap="goToCreate"
       >
         + 录单
@@ -45,7 +45,7 @@
   </view>
 
   <!-- 2. 城市过滤筛选栏 -->
-  <view class="admin-city-bar" wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === '管理' || currentUser.role === 'service' || currentUser.role === '客服') && userVisibleCities.length > 0 }}">
+  <view class="admin-city-bar" wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === 'service') && userVisibleCities.length > 0 }}">
     <scroll-view scroll-x class="city-scroll" enable-flex>
       <view 
         class="city-chip {{ selectedCityFilter === 'all' ? 'city-chip-active' : '' }}" 
@@ -146,7 +146,7 @@
     </view>
   </view>
 
-  <!-- 手机号核验弹窗 -->
+  <!-- 6. 手机号核验弹窗 -->
   <view class="modal-mask" wx:if="{{ showPhoneModal }}">
     <view class="modal-box">
       <view class="modal-title">🔐 员工身份核验</view>
@@ -165,7 +165,7 @@
     </view>
   </view>
 
-  <!-- 管理员专属：管理中心弹窗（员工 / 录入 / 渠道） -->
+  <!-- 7. 管理中心弹窗 -->
   <view class="modal-mask" wx:if="{{ showUserManageModal }}">
     <view class="modal-box user-manage-modal">
       <view class="type-switch">
@@ -180,27 +180,25 @@
           <view class="u-info">
             <view class="u-name-line">
               <text class="u-name">{{ item.name || '未填姓名' }}</text>
-              <text class="u-badge">{{ (item.role === 'admin' || item.role === '管理') ? '管理' : ((item.role === 'service' || item.role === '客服') ? '客服' : '师傅') }}</text>
+              <text class="u-badge">{{ item.role === 'admin' ? '管理' : (item.role === 'service' ? '客服' : '师傅') }}</text>
               <text class="test-icon-badge" wx:if="{{ item.isTest }}">🧪</text>
             </view>
             <text class="u-phone">{{ item.phone || '无电话' }}</text>
-            <text class="u-sub">权限城市：{{ item.citiesText }}</text>
-            <text class="u-sub" wx:if="{{ (item.role === 'worker' || item.role === '师傅') && item.groupId }}">📢 关联群号：{{ item.groupId }}</text>
+            <text class="u-sub">城市：{{ item.citiesText }}</text>
+            <text class="u-sub" wx:if="{{ item.role === 'worker' && item.groupId }}">群号：{{ item.groupId }}</text>
             <text class="u-status {{ item.isTest ? 'test-status' : (item.openid ? 'bound' : 'unbound') }}">
-              {{ item.isTest ? '⚡ 免锁账号（可自由切换）' : (item.openid ? '🟢 已绑定微信号' : '⚪ 待首次登录绑定') }}
+              {{ item.isTest ? '🧪 免锁测试' : (item.openid ? '🟢 已绑定' : '⚪ 待绑定') }}
             </text>
           </view>
           
           <view class="u-actions">
             <button 
-              class="btn-unbind" 
+              class="btn-edit-user" 
               size="mini" 
-              bindtap="unbindUserOpenid" 
-              data-id="{{ item._id }}" 
-              data-name="{{ item.name }}"
-              wx:if="{{ item.openid && !item.isTest }}"
+              bindtap="openEditUserModal" 
+              data-user="{{ item }}"
             >
-              解绑微信
+              编辑
             </button>
           </view>
         </view>
@@ -287,6 +285,56 @@
 
       <view class="modal-btns mt-30">
         <button class="modal-btn cancel" bindtap="closeUserManageModal">关闭</button>
+      </view>
+    </view>
+  </view>
+
+  <!-- 8. 专属二级弹窗：编辑员工属性与安全解绑 -->
+  <view class="modal-mask edit-modal-mask" wx:if="{{ showEditUserModal }}">
+    <view class="modal-box edit-user-modal">
+      <view class="modal-title">✏️ 编辑员工 ({{ editingUser.name }})</view>
+
+      <view class="city-select-box mt-20">
+        <text class="field-title">所属/管辖城市（支持多选）：</text>
+        <checkbox-group class="city-checkbox-group" bindchange="onEditUserCitiesChange">
+          <label class="checkbox-item" wx:for="{{ availableCities }}" wx:key="*this">
+            <checkbox value="{{ item }}" checked="{{ editUserCitiesMap[item] }}" /> {{ item }}
+          </label>
+        </checkbox-group>
+      </view>
+
+      <view class="mt-20" wx:if="{{ editingUser.role === 'worker' }}">
+        <text class="field-title">专属工作群号 / 群标识：</text>
+        <input 
+          class="modal-input" 
+          placeholder="如：TJ-01、BJ-01（无则留空）" 
+          value="{{ editUserGroupId }}" 
+          bindinput="onEditUserGroupIdInput" 
+        />
+      </view>
+
+      <view class="bind-manage-section mt-20">
+        <text class="field-title">微信绑定状态：</text>
+        <view class="bind-status-row">
+          <text class="u-status {{ editingUser.isTest ? 'test-status' : (editingUser.openid ? 'bound' : 'unbound') }}">
+            {{ editingUser.isTest ? '🧪 免锁测试' : (editingUser.openid ? '🟢 已绑定' : '⚪ 待绑定') }}
+          </text>
+          
+          <button 
+            class="btn-unbind" 
+            size="mini" 
+            bindtap="unbindUserInModal"
+            wx:if="{{ editingUser.openid && !editingUser.isTest && editingUser._id !== currentUser._id }}"
+          >
+            解绑
+          </button>
+        </view>
+        <view class="self-tip" wx:if="{{ editingUser._id === currentUser._id }}">当前登录账号不可解绑自身</view>
+      </view>
+
+      <view class="modal-btns mt-30">
+        <button class="modal-btn cancel" bindtap="closeEditUserModal">取消</button>
+        <button class="modal-btn confirm" bindtap="submitEditUser">保存</button>
       </view>
     </view>
   </view>
