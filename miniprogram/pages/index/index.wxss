@@ -8,7 +8,7 @@
     box-sizing: border-box;
   }
   
-  /* 顶部身份卡片：流式自适应垂直排列 */
+  /* 顶部身份卡片 */
   .user-header-card {
     display: flex !important;
     flex-direction: column !important;
@@ -16,7 +16,7 @@
     background: #ffffff;
     border-radius: 18rpx;
     padding: 24rpx !important;
-    margin-bottom: 24rpx;
+    margin-bottom: 20rpx;
     box-shadow: 0 2rpx 10rpx rgba(0,0,0,0.04);
     box-sizing: border-box;
     width: 100% !important;
@@ -87,12 +87,12 @@
   
   
   /* ==========================================================
-     城市筛选胶囊 - 减小高度并完美垂直居中
+     城市筛选胶囊栏
      ========================================================== */
   .admin-city-bar {
     width: 100%;
     white-space: nowrap;
-    margin-bottom: 20rpx;
+    margin-bottom: 12rpx !important;
     box-sizing: border-box;
   }
   
@@ -106,12 +106,12 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: 56rpx !important;
+    height: 52rpx !important;
     line-height: normal !important;
-    padding: 0 28rpx !important;
-    margin-right: 16rpx;
+    padding: 0 24rpx !important;
+    margin-right: 12rpx !important;
     font-size: 26rpx !important;
-    border-radius: 28rpx !important;
+    border-radius: 26rpx !important;
     background-color: #ffffff;
     color: #4b5563;
     border: 1rpx solid #e5e7eb;
@@ -127,7 +127,7 @@
   
   
   /* ==========================================================
-     顶部 4 个按钮同行排布与精简样式
+     顶部 4 个按钮同行排布
      ========================================================== */
   .header-actions {
     display: flex;
@@ -178,14 +178,14 @@
   
   
   /* ==========================================================
-     工单状态 Tab 栏与检索栏
+     工单状态 Tab 栏与时间维度筛选栏
      ========================================================== */
   .status-tab-bar {
     display: flex;
     background: #ffffff;
     border-radius: 12rpx;
     padding: 10rpx;
-    margin-bottom: 20rpx;
+    margin-bottom: 12rpx;
     box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.02);
   }
   
@@ -226,6 +226,45 @@
     height: 6rpx;
     background: #07c160;
     border-radius: 3rpx;
+  }
+  
+  /* 时间筛选横向胶囊栏样式 */
+  .time-filter-bar {
+    width: 100%;
+    white-space: nowrap;
+    margin-bottom: 16rpx;
+    box-sizing: border-box;
+  }
+  
+  .time-scroll {
+    display: flex;
+    width: 100%;
+    box-sizing: border-box;
+    overflow-x: auto;
+  }
+  
+  .time-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 52rpx !important;
+    line-height: normal !important;
+    padding: 0 28rpx !important;
+    margin-right: 12rpx !important;
+    font-size: 26rpx !important;
+    border-radius: 26rpx !important;
+    background-color: #ffffff;
+    color: #4b5563;
+    border: 1rpx solid #e5e7eb;
+    box-sizing: border-box;
+    vertical-align: middle;
+    flex-shrink: 0;
+  }
+  
+  .time-chip-active {
+    background-color: #07c160 !important;
+    color: #ffffff !important;
+    border-color: #07c160 !important;
   }
   
   .search-bar {
@@ -352,7 +391,7 @@
   
   
   /* ==========================================================
-     弹窗与管理中心样式（含所有 Tab 的滚动与表单完美对齐）
+     弹窗与管理中心样式
      ========================================================== */
   .modal-mask {
     position: fixed;
@@ -382,7 +421,6 @@
     box-sizing: border-box;
   }
   
-  /* 顶部 Tab 切换条 */
   .type-switch {
     display: flex;
     background: #f1f5f9;
@@ -408,7 +446,6 @@
     box-shadow: 0 2rpx 6rpx rgba(0,0,0,0.04);
   }
   
-  /* 统一的弹窗内滚动区域（覆盖员工、录入、渠道三个 Tab） */
   .modal-scroll-area {
     max-height: 520rpx !important;
     width: 100%;
@@ -434,7 +471,6 @@
     margin-top: 16rpx !important;
   }
   
-  /* 员工卡片样式 */
   .user-manage-item {
     background: #f8fafc;
     border: 1rpx solid #e2e8f0;
@@ -509,7 +545,6 @@
     line-height: normal !important;
   }
   
-  /* 角色与城市单复选框样式调整 */
   .role-radio-group, .city-checkbox-group {
     display: flex;
     flex-wrap: wrap;
@@ -543,7 +578,6 @@
     margin-top: 4rpx;
   }
   
-  /* 渠道管理列表 */
   .source-list {
     display: flex;
     flex-direction: column;

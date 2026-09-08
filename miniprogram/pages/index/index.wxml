@@ -73,7 +73,46 @@
     </scroll-view>
   </view>
 
-  <!-- 3. 工单状态分类 Tab 与数量统计 -->
+  <!-- 3. 时间维度筛选栏（顺序：今日 / 次日 / 本周 / 自定义 / 全部，默认选今日） -->
+  <view class="time-filter-bar">
+    <view class="time-scroll">
+      <view 
+        class="time-chip {{ timeFilterType === 'today' ? 'time-chip-active' : '' }}" 
+        bindtap="onTimeFilterChange" 
+        data-type="today"
+      >
+        今日
+      </view>
+      <view 
+        class="time-chip {{ timeFilterType === 'tomorrow' ? 'time-chip-active' : '' }}" 
+        bindtap="onTimeFilterChange" 
+        data-type="tomorrow"
+      >
+        次日
+      </view>
+      <view 
+        class="time-chip {{ timeFilterType === 'week' ? 'time-chip-active' : '' }}" 
+        bindtap="onTimeFilterChange" 
+        data-type="week"
+      >
+        本周
+      </view>
+      <picker mode="date" bindchange="onCustomDateChange">
+        <view class="time-chip {{ timeFilterType === 'custom' ? 'time-chip-active' : '' }}">
+          {{ customDateText || '自定义 ▾' }}
+        </view>
+      </picker>
+      <view 
+        class="time-chip {{ timeFilterType === 'all' ? 'time-chip-active' : '' }}" 
+        bindtap="onTimeFilterChange" 
+        data-type="all"
+      >
+        全部
+      </view>
+    </view>
+  </view>
+
+  <!-- 4. 工单状态分类 Tab 与数量统计 -->
   <view class="status-tab-bar">
     <view 
       class="tab-item {{ currentTab === item.key ? 'tab-item-active' : '' }}" 
@@ -88,7 +127,7 @@
     </view>
   </view>
 
-  <!-- 4. 检索区域 -->
+  <!-- 5. 检索区域 -->
   <view class="search-bar">
     <input 
       class="search-input" 
@@ -98,7 +137,7 @@
     />
   </view>
 
-  <!-- 5. 订单列表 -->
+  <!-- 6. 订单列表 -->
   <view class="order-list" style="padding-bottom: {{ isBatchMode ? '140rpx' : '0' }};">
     <view 
       class="order-card" 
@@ -109,7 +148,6 @@
     >
       <view class="card-top">
         <view class="top-left">
-          <!-- 修复复选框事件：绑定 catchtap 和 data-id，确保点击时正确触发状态切换 -->
           <checkbox 
             wx:if="{{ isBatchMode }}" 
             value="{{ item._id }}" 
@@ -158,11 +196,11 @@
     </view>
 
     <view class="empty-state" wx:if="{{ filteredOrders.length === 0 }}">
-      <text>{{ !currentUser ? '请先绑定手机号以查看工单' : '当前城市或分类下暂无工单' }}</text>
+      <text>{{ !currentUser ? '请先绑定手机号以查看工单' : '当前城市、时间和分类下暂无工单' }}</text>
     </view>
   </view>
 
-  <!-- 6. 底部固定：批量派单操作悬浮条 -->
+  <!-- 7. 底部固定：批量派单操作悬浮条 -->
   <view class="batch-action-bar" wx:if="{{ isBatchMode }}">
     <view class="batch-info">
       已选 <text class="font-bold font-green">{{ selectedOrderIds.length }}</text> 单
@@ -177,7 +215,7 @@
     </view>
   </view>
 
-  <!-- 7. 手机号核验弹窗 -->
+  <!-- 8. 手机号核验弹窗 -->
   <view class="modal-mask" wx:if="{{ showPhoneModal }}">
     <view class="modal-box">
       <view class="modal-title">🔐 员工身份核验</view>
@@ -196,7 +234,7 @@
     </view>
   </view>
 
-  <!-- 8. 管理中心弹窗 -->
+  <!-- 9. 管理中心弹窗 -->
   <view class="modal-mask" wx:if="{{ showUserManageModal }}">
     <view class="modal-box user-manage-modal">
       <view class="type-switch">
@@ -205,7 +243,7 @@
         <view class="type-btn {{ userManageTab === 'source' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="source">🏷️ 渠道 ({{ allSourceList.length }})</view>
       </view>
 
-      <!-- 8.1 Tab 1：员工列表 -->
+      <!-- 员工列表 Tab -->
       <scroll-view scroll-y class="modal-scroll-area" wx:if="{{ userManageTab === 'list' }}">
         <view class="user-manage-item" wx:for="{{ allUserList }}" wx:key="_id">
           <view class="u-info">
@@ -236,7 +274,7 @@
         <view class="empty-stats" wx:if="{{ allUserList.length === 0 }}">暂无员工数据</view>
       </scroll-view>
 
-      <!-- 8.2 Tab 2：录入员工 -->
+      <!-- 录入员工 Tab -->
       <scroll-view scroll-y class="modal-scroll-area" wx:if="{{ userManageTab === 'add' }}">
         <view class="form-group-box">
           <text class="field-title">员工姓名：</text>
@@ -295,7 +333,7 @@
         </view>
       </scroll-view>
 
-      <!-- 8.3 Tab 3：渠道管理 -->
+      <!-- 渠道管理 Tab -->
       <scroll-view scroll-y class="modal-scroll-area" wx:if="{{ userManageTab === 'source' }}">
         <view class="form-group-box">
           <view class="source-list">
@@ -324,7 +362,7 @@
     </view>
   </view>
 
-  <!-- 9. 编辑员工弹窗 -->
+  <!-- 10. 编辑员工弹窗 -->
   <view class="modal-mask edit-modal-mask" wx:if="{{ showEditUserModal }}">
     <view class="modal-box edit-user-modal">
       <view class="modal-title">✏️ 编辑员工 ({{ editingUser.name }})</view>
