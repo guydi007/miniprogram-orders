@@ -485,7 +485,10 @@ Page({
       let allOrders = [];
       if (tasks.length > 0) {
         const results = await Promise.all(tasks);
-        allOrders = results.reduce((acc, cur) => acc.concat(cur.data || []), []);
+        allOrders = results.reduce((acc, cur) => {
+          const list = (cur && Array.isArray(cur.data)) ? cur.data : [];
+          return acc.concat(list);
+        }, []);
       }
 
       // 🌟 新增：多字段复合倒序排序（一：预约时间倒序，二：创建时间倒序）
@@ -651,16 +654,37 @@ Page({
   },
 
   goToDetail(e) {
+    if (this._isNavigating) return;
+    this._isNavigating = true;
     const id = e.currentTarget.dataset.id;
-    wx.navigateTo({ url: `/pages/detail/detail?id=${id}` });
+    wx.navigateTo({
+      url: `/pages/detail/detail?id=${id}`,
+      complete: () => {
+        setTimeout(() => { this._isNavigating = false; }, 500);
+      }
+    });
   },
-
+  
   goToCreate() {
-    wx.navigateTo({ url: '/pages/create/create' });
+    if (this._isNavigating) return;
+    this._isNavigating = true;
+    wx.navigateTo({
+      url: '/pages/create/create',
+      complete: () => {
+        setTimeout(() => { this._isNavigating = false; }, 500);
+      }
+    });
   },
-
+  
   goToStats() {
-    wx.navigateTo({ url: '/pages/stats/stats' });
+    if (this._isNavigating) return;
+    this._isNavigating = true;
+    wx.navigateTo({
+      url: '/pages/stats/stats',
+      complete: () => {
+        setTimeout(() => { this._isNavigating = false; }, 500);
+      }
+    });
   },
 
   openUserManageModal() {

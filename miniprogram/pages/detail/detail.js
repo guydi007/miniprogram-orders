@@ -176,7 +176,7 @@ Page({
       return wx.showToast({ title: '请选择有效师傅', icon: 'none' });
     }
 
-    wx.showLoading({ title: '正在指派师傅...' });
+    wx.showLoading({ title: '正在指派师傅...', mask: true });
     const updateData = {
       workerName: worker.name,
       workerPhone: worker.phone || '',
@@ -188,7 +188,7 @@ Page({
       const res = await wx.cloud.callFunction({
         name: 'manageOrder',
         data: {
-          action: 'assignWorker',
+          action: 'updateOrder',
           orderId: this.data.orderId,
           data: updateData
         }
@@ -197,15 +197,30 @@ Page({
       wx.hideLoading();
       const result = res.result || {};
       if (result.success) {
+        // 🌟 核心改动：直接更新页面绑定的工单字段，不触发带遮罩的二次拉取，彻底解决“页面无变化”与提示冲突
+        this.setData({
+          'order.workerName': updateData.workerName,
+          'order.workerPhone': updateData.workerPhone,
+          'order.workerGroupId': updateData.workerGroupId,
+          'order.status': updateData.status
+        });
         wx.showToast({ title: '指派成功', icon: 'success' });
-        this.fetchOrderDetail(this.data.orderId);
       } else {
-        wx.showToast({ title: '指派失败，请重试', icon: 'none' });
+        const errMsg = result.error ? (result.error.errMsg || JSON.stringify(result.error)) : (result.msg || '更新未生效');
+        wx.showModal({
+          title: '指派未成功',
+          content: `云端返回：${errMsg}`,
+          showCancel: false
+        });
       }
     } catch (err) {
       wx.hideLoading();
       console.error('指派异常：', err);
-      wx.showToast({ title: '网络异常，请重试', icon: 'none' });
+      wx.showModal({
+        title: '调用失败',
+        content: `异常信息：${err.message || err.errMsg || '网络请求超时'}`,
+        showCancel: false
+      });
     }
   },
 
@@ -641,7 +656,6 @@ Page({
 
     if (order && (order.settleType === (settleMode === 'full' ? '全款' : '预付款'))) {
       const snap = initialSnapshot || {};
-      // 🌟 修复点：使用 String() 统一转为字符串格式再比对，彻底解决数字与字符串全等比较误判 Bug
       const isNoChange = (
         localPhotos.length === 0 &&
         String(inputCash) === String(snap.cash || '') &&

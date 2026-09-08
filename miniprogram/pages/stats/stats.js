@@ -102,7 +102,10 @@ Page({
       let allOrders = [];
       if (tasks.length > 0) {
         const results = await Promise.all(tasks);
-        allOrders = results.reduce((acc, cur) => acc.concat(cur.data || []), []);
+        allOrders = results.reduce((acc, cur) => {
+          const list = (cur && Array.isArray(cur.data)) ? cur.data : [];
+          return acc.concat(list);
+        }, []);
       }
 
       this.setData({ allOrders });
