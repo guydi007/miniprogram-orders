@@ -109,7 +109,15 @@
     >
       <view class="card-top">
         <view class="top-left">
-          <checkbox wx:if="{{ isBatchMode }}" value="{{ item._id }}" checked="{{ selectedOrderMap[item._id] }}" catchtap="stopBubble" catchchange="onCheckboxChange" data-id="{{ item._id }}" style="margin-right: 12rpx;" />
+          <!-- 修复复选框事件：绑定 catchtap 和 data-id，确保点击时正确触发状态切换 -->
+          <checkbox 
+            wx:if="{{ isBatchMode }}" 
+            value="{{ item._id }}" 
+            checked="{{ selectedOrderMap[item._id] }}" 
+            catchtap="onToggleSelectOrder" 
+            data-id="{{ item._id }}" 
+            style="margin-right: 12rpx;" 
+          />
           <text class="city-badge" wx:if="{{ item.city }}">{{ item.city }}</text>
           <text class="time">📅 {{ item.appointmentTime || '待定' }}</text>
         </view>
@@ -160,9 +168,9 @@
       已选 <text class="font-bold font-green">{{ selectedOrderIds.length }}</text> 单
     </view>
     <view class="batch-btns">
-      <button class="btn-select-all" size="mini" bindtap="selectAllOrders">全选当前</button>
+      <button class="btn-select-all" size="mini" bindtap="selectAllOrders">全选/取消</button>
       <picker bindchange="onBatchAssignWorker" range="{{ candidateWorkerNames }}" disabled="{{ selectedOrderIds.length === 0 }}">
-        <button class="btn-primary {{ selectedOrderIds.length === 0 ? 'btn-disabled' : '' }}" size="mini">
+        <button class="btn-primary {{ selectedOrderIds.length === 0 ? 'btn-disabled' : '' }}" size="mini" style="margin: 0 !important;">
           指派给师傅 ➔
         </button>
       </picker>
@@ -197,19 +205,20 @@
         <view class="type-btn {{ userManageTab === 'source' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="source">🏷️ 渠道 ({{ allSourceList.length }})</view>
       </view>
 
-      <view class="user-list-box" wx:if="{{ userManageTab === 'list' }}">
+      <!-- 8.1 Tab 1：员工列表 -->
+      <scroll-view scroll-y class="modal-scroll-area" wx:if="{{ userManageTab === 'list' }}">
         <view class="user-manage-item" wx:for="{{ allUserList }}" wx:key="_id">
           <view class="u-info">
             <view class="u-name-line">
               <text class="u-name">{{ item.name || '未填姓名' }}</text>
-              <text class="u-badge">{{ item.role === 'admin' ? '管理' : (item.role === 'service' ? '客服' : '师傅') }}</text>
+              <text class="u-badge {{ item.role === 'admin' ? 'b-admin' : (item.role === 'service' ? 'b-service' : 'b-worker') }}">{{ item.role === 'admin' ? '管理' : (item.role === 'service' ? '客服' : '师傅') }}</text>
               <text class="test-icon-badge" wx:if="{{ item.isTest }}">🧪</text>
             </view>
-            <text class="u-phone">{{ item.phone || '无电话' }}</text>
-            <text class="u-sub">城市：{{ item.citiesText }}</text>
-            <text class="u-sub" wx:if="{{ item.role === 'worker' && item.groupId }}">群号：{{ item.groupId }}</text>
+            <text class="u-phone">📞 {{ item.phone || '无电话' }}</text>
+            <text class="u-sub">📍 城市：{{ item.citiesText }}</text>
+            <text class="u-sub" wx:if="{{ item.role === 'worker' && item.groupId }}">🏷️ 群号：{{ item.groupId }}</text>
             <text class="u-status {{ item.isTest ? 'test-status' : (item.openid ? 'bound' : 'unbound') }}">
-              {{ item.isTest ? '🧪 免锁测试' : (item.openid ? '🟢 已绑定' : '⚪ 待绑定') }}
+              {{ item.isTest ? '🧪 免锁测试' : (item.openid ? '🟢 已绑定微信' : '⚪ 待扫码绑定') }}
             </text>
           </view>
           
@@ -225,85 +234,91 @@
           </view>
         </view>
         <view class="empty-stats" wx:if="{{ allUserList.length === 0 }}">暂无员工数据</view>
-      </view>
+      </scroll-view>
 
-      <view class="user-add-box" wx:if="{{ userManageTab === 'add' }}">
-        <text class="field-title">员工姓名：</text>
-        <input 
-          class="modal-input" 
-          placeholder="如：赵师傅、李客服" 
-          value="{{ newUserName }}" 
-          bindinput="onNewUserNameInput" 
-        />
-
-        <text class="field-title mt-20">员工手机号（登录唯一凭据）：</text>
-        <input 
-          class="modal-input" 
-          type="number" 
-          maxlength="11" 
-          placeholder="请输入11位手机号" 
-          value="{{ newUserPhone }}" 
-          bindinput="onNewUserPhoneInput" 
-        />
-
-        <view class="role-select-box mt-20">
-          <text class="role-label">分配角色：</text>
-          <radio-group class="role-radio-group" bindchange="onNewUserRoleChange">
-            <label class="radio-item"><radio value="worker" checked="{{ newUserRole === 'worker' }}" />师傅</label>
-            <label class="radio-item"><radio value="service" checked="{{ newUserRole === 'service' }}" />客服</label>
-            <label class="radio-item"><radio value="admin" checked="{{ newUserRole === 'admin' }}" />管理</label>
-          </radio-group>
-        </view>
-
-        <view class="city-select-box mt-20">
-          <text class="field-title">所属/管辖城市（支持多选）：</text>
-          <checkbox-group class="city-checkbox-group" bindchange="onNewUserCitiesChange">
-            <label class="checkbox-item" wx:for="{{ availableCities }}" wx:key="*this">
-              <checkbox value="{{ item }}" checked="{{ newUserCitiesMap[item] }}" /> {{ item }}
-            </label>
-          </checkbox-group>
-        </view>
-
-        <view class="mt-20" wx:if="{{ newUserRole === 'worker' }}">
-          <text class="field-title">专属工作群号 / 群标识：</text>
+      <!-- 8.2 Tab 2：录入员工 -->
+      <scroll-view scroll-y class="modal-scroll-area" wx:if="{{ userManageTab === 'add' }}">
+        <view class="form-group-box">
+          <text class="field-title">员工姓名：</text>
           <input 
             class="modal-input" 
-            placeholder="如：TJ-01、BJ-01（无群可留空）" 
-            value="{{ newUserGroupId }}" 
-            bindinput="onNewUserGroupIdInput" 
+            placeholder="如：赵师傅、李客服" 
+            value="{{ newUserName }}" 
+            bindinput="onNewUserNameInput" 
           />
-        </view>
 
-        <view class="test-switch-row mt-20">
-          <text class="test-switch-label">🧪 设为免锁测试号：</text>
-          <switch checked="{{ newUserIsTest }}" color="#07c160" bindchange="onNewUserIsTestChange" />
-        </view>
-        <view class="test-switch-tip">开启后该账号不绑定任何微信，可在多台手机随时切换登录用于测试。</view>
-
-        <button class="btn-primary mt-30" bindtap="submitAddUser">确认录入</button>
-      </view>
-
-      <view class="source-manage-box" wx:if="{{ userManageTab === 'source' }}">
-        <view class="source-list">
-          <view class="source-item" wx:for="{{ allSourceList }}" wx:key="_id">
-            <text class="source-name">{{ item.name }}</text>
-            <button class="btn-del-source" size="mini" bindtap="deleteSource" data-id="{{ item._id }}" data-name="{{ item.name }}">删除</button>
-          </view>
-          <view class="empty-stats" wx:if="{{ allSourceList.length === 0 }}">暂无渠道数据</view>
-        </view>
-
-        <view class="add-source-bar mt-20">
+          <text class="field-title mt-16">员工手机号（登录唯一凭据）：</text>
           <input 
-            class="modal-input add-source-input" 
-            placeholder="输入新渠道（如：抖音）" 
-            value="{{ newSourceName }}" 
-            bindinput="onNewSourceNameInput" 
+            class="modal-input" 
+            type="number" 
+            maxlength="11" 
+            placeholder="请输入11位手机号" 
+            value="{{ newUserPhone }}" 
+            bindinput="onNewUserPhoneInput" 
           />
-          <button class="btn-add-source" bindtap="addSource">添加</button>
-        </view>
-      </view>
 
-      <view class="modal-btns mt-30">
+          <view class="role-select-box mt-16">
+            <text class="field-title">分配角色：</text>
+            <radio-group class="role-radio-group" bindchange="onNewUserRoleChange">
+              <label class="radio-item"><radio value="worker" checked="{{ newUserRole === 'worker' }}" />师傅</label>
+              <label class="radio-item"><radio value="service" checked="{{ newUserRole === 'service' }}" />客服</label>
+              <label class="radio-item"><radio value="admin" checked="{{ newUserRole === 'admin' }}" />管理</label>
+            </radio-group>
+          </view>
+
+          <view class="city-select-box mt-16">
+            <text class="field-title">所属/管辖城市（支持多选）：</text>
+            <checkbox-group class="city-checkbox-group" bindchange="onNewUserCitiesChange">
+              <label class="checkbox-item" wx:for="{{ availableCities }}" wx:key="*this">
+                <checkbox value="{{ item }}" checked="{{ newUserCitiesMap[item] }}" /> {{ item }}
+              </label>
+            </checkbox-group>
+          </view>
+
+          <view class="mt-16" wx:if="{{ newUserRole === 'worker' }}">
+            <text class="field-title">专属工作群号 / 群标识：</text>
+            <input 
+              class="modal-input" 
+              placeholder="如：TJ-01、BJ-01（无群可留空）" 
+              value="{{ newUserGroupId }}" 
+              bindinput="onNewUserGroupIdInput" 
+            />
+          </view>
+
+          <view class="test-switch-row mt-16">
+            <text class="test-switch-label">🧪 设为免锁测试号：</text>
+            <switch checked="{{ newUserIsTest }}" color="#07c160" bindchange="onNewUserIsTestChange" />
+          </view>
+          <view class="test-switch-tip">开启后该账号不绑定任何微信，可在多台手机随时切换登录用于测试。</view>
+
+          <button class="btn-primary mt-20" bindtap="submitAddUser">确认录入</button>
+        </view>
+      </scroll-view>
+
+      <!-- 8.3 Tab 3：渠道管理 -->
+      <scroll-view scroll-y class="modal-scroll-area" wx:if="{{ userManageTab === 'source' }}">
+        <view class="form-group-box">
+          <view class="source-list">
+            <view class="source-item" wx:for="{{ allSourceList }}" wx:key="_id">
+              <text class="source-name">{{ item.name }}</text>
+              <button class="btn-del-source" size="mini" bindtap="deleteSource" data-id="{{ item._id }}" data-name="{{ item.name }}">删除</button>
+            </view>
+            <view class="empty-stats" wx:if="{{ allSourceList.length === 0 }}">暂无渠道数据</view>
+          </view>
+
+          <view class="add-source-bar mt-20">
+            <input 
+              class="modal-input add-source-input" 
+              placeholder="输入新渠道（如：抖音）" 
+              value="{{ newSourceName }}" 
+              bindinput="onNewSourceNameInput" 
+            />
+            <button class="btn-add-source" bindtap="addSource">添加</button>
+          </view>
+        </view>
+      </scroll-view>
+
+      <view class="modal-btns mt-20">
         <button class="modal-btn cancel" bindtap="closeUserManageModal">关闭</button>
       </view>
     </view>

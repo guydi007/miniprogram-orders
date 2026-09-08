@@ -139,8 +139,10 @@ Page({
       return this.goToDetail(e);
     }
     const id = e.currentTarget.dataset.id;
+    if (!id) return;
+
     const map = { ...this.data.selectedOrderMap };
-    map[id] = !map[id];
+    map[id] = !map[id]; // 取反勾选状态
 
     const ids = [];
     Object.keys(map).forEach(k => {
@@ -155,6 +157,19 @@ Page({
 
   selectAllOrders() {
     const list = this.data.filteredOrders || [];
+    const currentIds = this.data.selectedOrderIds || [];
+
+    // 如果当前已经全选了，再次点击则实现“取消全选”
+    if (currentIds.length === list.length && list.length > 0) {
+      this.setData({
+        selectedOrderMap: {},
+        selectedOrderIds: []
+      });
+      wx.showToast({ title: '已取消全选', icon: 'none' });
+      return;
+    }
+
+    // 否则执行全选当前
     const map = {};
     const ids = [];
     list.forEach(o => {
