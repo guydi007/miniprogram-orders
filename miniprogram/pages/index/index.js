@@ -15,7 +15,6 @@ Page({
     userVisibleCities: ['天津', '北京'],
     selectedCityFilter: 'all',
 
-    // 🌟 批量派单相关状态
     isBatchMode: false,
     selectedOrderMap: {},
     selectedOrderIds: [],
@@ -112,7 +111,6 @@ Page({
     }
   },
 
-  // 🌟 拉取所有可用师傅供批量派单选择
   fetchCandidateWorkers() {
     const db = wx.cloud.database();
     db.collection('users').where({ role: 'worker' }).get().then(res => {
@@ -121,10 +119,9 @@ Page({
         candidateWorkers: workers,
         candidateWorkerNames: ['请选择师傅', ...workers.map(w => w.name + (w.groupId ? ` (${w.groupId})` : ''))]
       });
-    }).catch(e => console.error('拉取师傅列表失败：', e));
+    }).catch(e => console.error('获取师傅列表失败：', e));
   },
 
-  // 🌟 切换批量派单模式
   toggleBatchMode() {
     if (!checkIsAdmin(this.data.currentUser)) {
       return wx.showToast({ title: '仅限管理员使用批量派单', icon: 'none' });
@@ -137,7 +134,6 @@ Page({
     });
   },
 
-  // 🌟 勾选/取消勾选单个工单
   onToggleSelectOrder(e) {
     if (!this.data.isBatchMode) {
       return this.goToDetail(e);
@@ -157,7 +153,6 @@ Page({
     });
   },
 
-  // 🌟 全选当前过滤下的所有工单
   selectAllOrders() {
     const list = this.data.filteredOrders || [];
     const map = {};
@@ -173,9 +168,8 @@ Page({
     wx.showToast({ title: `已全选 ${ids.length} 单`, icon: 'none' });
   },
 
-  // 🌟 执行批量派单（通过 manageOrder 云函数托管）
   async onBatchAssignWorker(e) {
-    const idx = Number(e.detail.value) - 1; // 减去首项 "请选择师傅"
+    const idx = Number(e.detail.value) - 1;
     const worker = this.data.candidateWorkers[idx];
     const orderIds = this.data.selectedOrderIds;
 

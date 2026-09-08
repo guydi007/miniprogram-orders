@@ -1,5 +1,5 @@
 <view class="container">
-  <!-- 1. 顶部个人身份卡片与操作按钮 -->
+  <!-- 1. 顶部个人身份卡片与同行4按钮操作区 -->
   <view class="user-header-card" bindtap="handleUserHeaderTap">
     <view class="user-info">
       <text class="user-avatar">👤</text>
@@ -18,15 +18,21 @@
       </view>
     </view>
 
-    <!-- 头部操作区 -->
+    <!-- 顶部4个按钮合并为同一行，批量精简为“☑️ 批量” -->
     <view class="header-actions" catchtap="stopBubble">
-      <!-- 🌟 管理员专属：批量派单模式切换开关 -->
       <button 
-        class="btn-action btn-batch-toggle" 
+        class="btn-action btn-create" 
+        wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === 'service') }}" 
+        bindtap="goToCreate"
+      >
+        + 录单
+      </button>
+      <button 
+        class="btn-action btn-batch" 
         wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
         bindtap="toggleBatchMode"
       >
-        {{ isBatchMode ? '退出批量' : '☑️ 批量派单' }}
+        {{ isBatchMode ? '退出' : '☑️ 批量' }}
       </button>
       <button 
         class="btn-action btn-stats" 
@@ -36,18 +42,11 @@
         📊 营收
       </button>
       <button 
-        class="btn-action btn-add-user" 
+        class="btn-action btn-manage" 
         wx:if="{{ currentUser && currentUser.role === 'admin' }}" 
         bindtap="openUserManageModal"
       >
         ⚙️ 管理
-      </button>
-      <button 
-        class="btn-action btn-create" 
-        wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === 'service') }}" 
-        bindtap="goToCreate"
-      >
-        + 录单
       </button>
     </view>
   </view>
@@ -99,7 +98,7 @@
     />
   </view>
 
-  <!-- 5. 订单列表（支持批量勾选） -->
+  <!-- 5. 订单列表 -->
   <view class="order-list" style="padding-bottom: {{ isBatchMode ? '140rpx' : '0' }};">
     <view 
       class="order-card" 
@@ -110,7 +109,6 @@
     >
       <view class="card-top">
         <view class="top-left">
-          <!-- 🌟 批量多选复选框 -->
           <checkbox wx:if="{{ isBatchMode }}" value="{{ item._id }}" checked="{{ selectedOrderMap[item._id] }}" catchtap="stopBubble" catchchange="onCheckboxChange" data-id="{{ item._id }}" style="margin-right: 12rpx;" />
           <text class="city-badge" wx:if="{{ item.city }}">{{ item.city }}</text>
           <text class="time">📅 {{ item.appointmentTime || '待定' }}</text>
@@ -156,7 +154,7 @@
     </view>
   </view>
 
-  <!-- 🌟 6. 底部固定：批量派单操作浮层 -->
+  <!-- 6. 底部固定：批量派单操作悬浮条 -->
   <view class="batch-action-bar" wx:if="{{ isBatchMode }}">
     <view class="batch-info">
       已选 <text class="font-bold font-green">{{ selectedOrderIds.length }}</text> 单
@@ -199,7 +197,6 @@
         <view class="type-btn {{ userManageTab === 'source' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="source">🏷️ 渠道 ({{ allSourceList.length }})</view>
       </view>
 
-      <!-- Tab 1：员工列表 -->
       <view class="user-list-box" wx:if="{{ userManageTab === 'list' }}">
         <view class="user-manage-item" wx:for="{{ allUserList }}" wx:key="_id">
           <view class="u-info">
@@ -230,7 +227,6 @@
         <view class="empty-stats" wx:if="{{ allUserList.length === 0 }}">暂无员工数据</view>
       </view>
 
-      <!-- Tab 2：录入新员工 -->
       <view class="user-add-box" wx:if="{{ userManageTab === 'add' }}">
         <text class="field-title">员工姓名：</text>
         <input 
@@ -287,7 +283,6 @@
         <button class="btn-primary mt-30" bindtap="submitAddUser">确认录入</button>
       </view>
 
-      <!-- Tab 3：渠道来源管理 -->
       <view class="source-manage-box" wx:if="{{ userManageTab === 'source' }}">
         <view class="source-list">
           <view class="source-item" wx:for="{{ allSourceList }}" wx:key="_id">
