@@ -85,16 +85,14 @@ Page({
             this.setData({ showPhoneModal: true });
           }
         };
+        if (!app.authReadyCallback) {
+          this.setData({ showPhoneModal: true });
+        }
       }
     });
   },
 
-  onReady() {
-    const cachedUser = wx.getStorageSync('currentUser');
-    if (!this.data.currentUser && (!cachedUser || !cachedUser.phone)) {
-      this.setData({ showPhoneModal: true });
-    }
-  },
+  onReady() {},
 
   onShow() {
     const cachedUser = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
@@ -196,6 +194,28 @@ Page({
     }
     if (!orderIds || orderIds.length === 0) {
       return wx.showToast({ title: '请先勾选需要派单的工单', icon: 'none' });
+    }
+
+    // 🌟 方案1核心校验：在提交批量派单前，校验所选师傅的管辖城市是否与勾选工单城市相符
+    const selectedOrders = (this.data.orders || []).filter(o => orderIds.includes(o._id));
+    const orderCities = [...new Set(selectedOrders.map(o => o.city).filter(Boolean))];
+
+    let workerCities = [];
+    if (Array.isArray(worker.cities)) workerCities = worker.cities;
+    else if (worker.cities && typeof worker.cities === 'object') workerCities = Object.values(worker.cities);
+    else if (typeof worker.cities === 'string') workerCities = [worker.cities];
+
+    if (workerCities.length > 0 && orderCities.length > 0) {
+      const hasMismatch = orderCities.some(orderCity => {
+        return !workerCities.some(wc => wc && (wc.includes(orderCity) || orderCity.includes(wc)));
+      });
+      if (hasMismatch) {
+        return wx.showModal({
+          title: '❌ 派单城市冲突',
+          content: `所选师傅【${worker.name}】（管辖城市：${workerCities.join('/')}）与您勾选的工单城市（${orderCities.join('/')}）不匹配，禁止跨城市派单！`,
+          showCancel: false
+        });
+      }
     }
 
     wx.showLoading({ title: `正在批量派单 (${orderIds.length}单)...` });
@@ -491,15 +511,12 @@ Page({
         }, []);
       }
 
-      // 🌟 新增：多字段复合倒序排序（一：预约时间倒序，二：创建时间倒序）
       allOrders.sort((a, b) => {
         const timeA = a.appointmentTime || '';
         const timeB = b.appointmentTime || '';
-        // 1. 先按预约时间倒序（字符串比较大小，时间大/靠后的排前面）
         if (timeA !== timeB) {
           return timeB.localeCompare(timeA);
         }
-        // 2. 预约时间相同时，按创建时间倒序
         const createA = a.createTime || '';
         const createB = b.createTime || '';
         return createB.localeCompare(createA);
@@ -532,17 +549,14 @@ Page({
     const { orders, currentTab, searchKey, selectedCityFilter, currentUser, timeFilterType, customDateValue } = this.data;
     let list = [...orders];
 
-    // 1. 城市过滤
     if (currentUser && (checkIsAdmin(currentUser) || currentUser.role === 'service') && selectedCityFilter !== 'all') {
       list = list.filter(o => o.city === selectedCityFilter);
     }
 
-    // 🌟 万能智能日期归一化解析引擎：完美兼容各种复杂日期格式与长文本备注
     const parseOrderDateStr = (text, defaultYear = new Date().getFullYear()) => {
       if (!text) return '';
       const str = String(text).trim();
 
-      // 匹配标准格式：YYYY-MM-DD 或 YYYY/MM/DD 或 YYYY.MM.DD
       const standardMatch = str.match(/(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
       if (standardMatch) {
         const y = standardMatch[1];
@@ -551,26 +565,29 @@ Page({
         return `${y}-${m}-${d}`;
       }
 
-      // 匹配中文简写格式：9月8日 或 09月08日 或 9.8 或 9-8 等
-      const cnMatch = str.match(/(\d{1,2})[月.-](\d{1,2})/);
+      const cnMatch = str.match(/(\d{1,2})月(\d{1,2})日?/);
       if (cnMatch) {
         const m = String(cnMatch[1]).padStart(2, '0');
         const d = String(cnMatch[2]).padStart(2, '0');
         return `${defaultYear}-${m}-${d}`;
       }
 
+      const dotMatch = str.match(/(?:^|[^\d])(\d{1,2})\.(\d{1,2})(?:[^\d]|$)/);
+      if (dotMatch) {
+        const m = String(dotMatch[1]).padStart(2, '0');
+        const d = String(dotMatch[2]).padStart(2, '0');
+        return `${defaultYear}-${m}-${d}`;
+      }
+
       return '';
     };
 
-    // 2. 时间过滤逻辑
     if (timeFilterType !== 'all') {
       const now = new Date();
       const currentYear = now.getFullYear();
       
-      // 今日日期 YYYY-MM-DD
       const todayStr = `${currentYear}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       
-      // 次日日期计算
       const tomorrow = new Date(now);
       tomorrow.setDate(now.getDate() + 1);
       const tomorrowStr = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
@@ -583,19 +600,17 @@ Page({
         if (!orderDateFormatted) return false;
 
         if (timeFilterType === 'today') {
-          return orderDateFormatted === todayStr;
+          return orderDateFormatted === todayStr || (o.status === '待派单' && orderDateFormatted < todayStr);
         } else if (timeFilterType === 'tomorrow') {
           return orderDateFormatted === tomorrowStr;
         } else if (timeFilterType === 'week') {
-          const d = new Date(orderDateFormatted);
+          const d = new Date(orderDateFormatted.replace(/-/g, '/') + ' 12:00:00');
           const day = now.getDay() || 7;
           
-          // 计算本周周一 00:00:00
           const monday = new Date(now);
           monday.setDate(now.getDate() - day + 1);
           monday.setHours(0, 0, 0, 0);
           
-          // 计算本周周日 23:59:59
           const sunday = new Date(monday);
           sunday.setDate(monday.getDate() + 6);
           sunday.setHours(23, 59, 59, 999);
@@ -616,12 +631,10 @@ Page({
       '未成单': list.filter(o => o.status === '未成单').length
     };
 
-    // 3. 状态 Tab 过滤
     if (currentTab !== 'all') {
       list = list.filter(o => o.status === currentTab);
     }
 
-    // 4. 关键字搜索过滤
     if (searchKey && searchKey.trim()) {
       const kw = searchKey.trim().toLowerCase();
       list = list.filter(o =>

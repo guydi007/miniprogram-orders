@@ -2,7 +2,8 @@ App({
   globalData: {
     currentUser: null,
     currentOpenid: '',
-    workerList: []
+    workerList: [],
+    availableCities: ['天津', '北京']
   },
 
   onLaunch() {
@@ -50,7 +51,14 @@ App({
         const openid = (res.result && (res.result.openid || res.result.OPENID)) || '';
         this.globalData.currentOpenid = openid;
 
+        const cachedUser = wx.getStorageSync('currentUser');
+
         if (!openid) {
+          if (cachedUser && cachedUser.phone) {
+            this.globalData.currentUser = cachedUser;
+            if (this.authReadyCallback) this.authReadyCallback(cachedUser);
+            return resolve(cachedUser);
+          }
           if (this.authReadyCallback) this.authReadyCallback(null);
           return resolve(null);
         }
@@ -65,7 +73,14 @@ App({
             if (this.authReadyCallback) this.authReadyCallback(user);
             resolve(user);
           } else {
-            // 未绑定当前微信号，清除过期缓存触发核验
+            // 🌟 核心保护：若本地已有登录的免锁测试账号（isTest），不应被误删！
+            if (cachedUser && (cachedUser.isTest || checkIsAdmin(cachedUser))) {
+              this.globalData.currentUser = cachedUser;
+              if (this.authReadyCallback) this.authReadyCallback(cachedUser);
+              return resolve(cachedUser);
+            }
+
+            // 未绑定微信的普通账号才清理缓存，重置登录态
             wx.removeStorageSync('currentUser');
             this.globalData.currentUser = null;
             if (this.authReadyCallback) this.authReadyCallback(null);
@@ -73,6 +88,11 @@ App({
           }
         }).catch(err => {
           console.error('查询用户信息失败：', err);
+          if (cachedUser && cachedUser.phone) {
+            this.globalData.currentUser = cachedUser;
+            if (this.authReadyCallback) this.authReadyCallback(cachedUser);
+            return resolve(cachedUser);
+          }
           this.globalData.currentUser = null;
           if (this.authReadyCallback) this.authReadyCallback(null);
           resolve(null);
@@ -100,3 +120,7 @@ App({
     }).catch(e => console.error('拉取师傅列表失败：', e));
   }
 });
+
+function checkIsAdmin(user) {
+  return Boolean(user && user.role === 'admin');
+}

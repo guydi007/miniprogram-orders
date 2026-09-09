@@ -66,6 +66,14 @@ Page({
     this.fetchSources();
   },
 
+  // 🌟 新增：页面显示时同步最新登录人，防止丢失登录上下文
+  onShow() {
+    const user = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
+    if (user && (!this.data.currentUser || this.data.currentUser._id !== user._id)) {
+      this.setData({ currentUser: user });
+    }
+  },
+
   async fetchSources() {
     const db = wx.cloud.database();
     try {
@@ -239,9 +247,11 @@ Page({
       }
     }
 
-    const creatorName = (currentUser && currentUser.name) || '员工';
-    const creatorPhone = (currentUser && currentUser.phone) || '';
-    const creatorRole = (currentUser && currentUser.role) || 'service';
+    // 🌟 修复关键点：动态双重兜底，避免从 data 解构的 currentUser 偶尔为 null 造成显示“员工”
+    const activeUser = currentUser || wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser) || {};
+    const creatorName = activeUser.name || '员工';
+    const creatorPhone = activeUser.phone || '';
+    const creatorRole = activeUser.role || 'service';
 
     const initialFeedbacks = [];
     if (initialFeedback) {
@@ -281,6 +291,7 @@ Page({
           status: workerName ? '已派单' : '待派单',
           isUrgent: false,
           creatorName: creatorName,
+          creator: creatorName, // 兼容备用
           creatorPhone: creatorPhone,
           creatorRole: creatorRole,
           feedbacks: initialFeedbacks,
