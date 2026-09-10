@@ -46,7 +46,7 @@
         <text class="info-val highlight">{{ order.appointmentTime }}</text>
         <view 
           class="btn-edit-time" 
-          wx:if="{{ (currentUser.role === 'admin' || currentUser.role === 'service') && order.status !== '已完工' && order.status !== '未成单' }}" 
+          wx:if="{{ isServiceOrLeader && order.status !== '已完工' && order.status !== '未成单' }}" 
           bindtap="openEditTimeModal"
         >
           <text class="edit-icon">✏️</text>
@@ -89,15 +89,15 @@
       <text class="info-val">{{ order.finishTimeFormatted || order.finishTime }}</text>
     </view>
     
-    <!-- 取消原因展示 -->
+    <!-- 取消原因展示（客服退单） -->
     <view class="info-row cancel-row" wx:if="{{ order.cancelReason }}">
-      <text class="info-label font-red">取消原因：</text>
-      <text class="info-val font-red">{{ order.cancelReason }}（{{ order.cancelOperator || '管理' }} {{ order.cancelTimeFormatted || '' }}）</text>
+      <text class="info-label font-red">退单取消：</text>
+      <text class="info-val font-red">{{ order.cancelReason }}（{{ order.cancelOperator || '客服' }} {{ order.cancelTimeFormatted || '' }}）</text>
     </view>
 
-    <!-- 师傅未成单原因展示 -->
+    <!-- 师傅现场未成单原因展示 -->
     <view class="info-row cancel-row" wx:if="{{ order.failReason }}">
-      <text class="info-label font-red">未成单原因：</text>
+      <text class="info-label font-red">现场未成：</text>
       <text class="info-val font-red">{{ order.failReason }}（{{ order.failOperator || '师傅' }} {{ order.failTimeFormatted || '' }}）</text>
     </view>
   </view>
@@ -122,20 +122,20 @@
     </view>
   </view>
 
-  <!-- 4. 操作按钮栏（纯英文判断） -->
+  <!-- 4. 操作按钮栏 -->
   <view class="actions-bar">
-    <!-- 客服可见：催单 -->
+    <!-- 客服与主管可见：催单 -->
     <button 
       class="btn-action btn-urgent" 
-      wx:if="{{ currentUser.role === 'service' && order.status !== '已完工' && order.status !== '未成单' }}" 
+      wx:if="{{ (currentUser.role === 'service' || currentUser.role === 'leader') && order.status !== '已完工' && order.status !== '未成单' }}" 
       bindtap="triggerUrgent"
     >
       🚨 催单
     </button>
 
-    <!-- 管理员可见：指派/改派师傅 -->
+    <!-- 单独派单/改派：仅限主管操作 -->
     <picker 
-      wx:if="{{ currentUser && currentUser.role === 'admin' && order.status !== '已完工' && order.status !== '未成单' }}" 
+      wx:if="{{ currentUser && isLeader && order.status !== '已完工' && order.status !== '未成单' }}" 
       bindchange="onAssignWorker" 
       range="{{ candidateWorkerNames }}"
       class="picker-btn-wrapper"
@@ -145,7 +145,7 @@
       </button>
     </picker>
 
-    <!-- 进度回馈按钮 -->
+    <!-- 进度回馈按钮：非未成单均可提交 -->
     <button 
       class="btn-action btn-feedback" 
       wx:if="{{ order.status !== '未成单' }}" 
@@ -154,37 +154,37 @@
       💬 回馈
     </button>
 
-    <!-- 管理与客服专属：取消工单 -->
+    <!-- 仅客服专属：取消工单（主管无此按钮） -->
     <button 
       class="btn-action btn-cancel" 
-      wx:if="{{ (currentUser.role === 'admin' || currentUser.role === 'service') && order.status !== '已完工' && order.status !== '未成单' }}" 
+      wx:if="{{ currentUser && currentUser.role === 'service' && order.status !== '已完工' && order.status !== '未成单' }}" 
       bindtap="openCancelModal"
     >
       ❌ 取消工单
     </button>
 
-    <!-- 师傅专属：未成单 -->
+    <!-- 现场未成单：仅负责该单的师傅或主管可操作 -->
     <button 
       class="btn-action btn-fail" 
-      wx:if="{{ currentUser.role === 'worker' && order.status !== '未成单' && order.status !== '已完工' }}" 
+      wx:if="{{ canOperateSettle && order.status !== '未成单' && order.status !== '已完工' }}" 
       bindtap="openFailModal"
     >
       未成单
     </button>
 
-    <!-- 师傅专属：预付单 -->
+    <!-- 预付单：仅负责该单的师傅或主管可操作 -->
     <button 
       class="btn-action btn-prepay" 
-      wx:if="{{ currentUser.role === 'worker' && order.status !== '未成单' && (!order.settleType || order.settleType === '预付款') }}" 
+      wx:if="{{ canOperateSettle && order.status !== '未成单' && (!order.settleType || order.settleType === '预付款') }}" 
       bindtap="openPrepayModal"
     >
       {{ order.settleType === '预付款' ? (order.remainingAmount > 0 ? '续收/结清尾款' : '修改预付单') : '预付单' }}
     </button>
 
-    <!-- 师傅专属：全款结单 -->
+    <!-- 全款结单：仅负责该单的师傅或主管可操作 -->
     <button 
       class="btn-action btn-done" 
-      wx:if="{{ currentUser.role === 'worker' && order.status !== '未成单' && (!order.settleType || order.settleType === '全款') }}" 
+      wx:if="{{ canOperateSettle && order.status !== '未成单' && (!order.settleType || order.settleType === '全款') }}" 
       bindtap="openFinishModal"
     >
       {{ order.settleType === '全款' ? '修改全款结算' : '全款结单' }}
@@ -198,7 +198,7 @@
       <view class="log-item feedback-log-item" wx:for="{{ order.feedbacks }}" wx:key="id">
         <view class="log-header">
           <view class="log-time">{{ item.timeFormatted || item.time }}</view>
-          <view class="log-operator">{{ item.operatorName }} ({{ item.operatorRole === 'worker' ? '师傅' : (item.operatorRole === 'service' ? '客服' : '管理') }})</view>
+          <view class="log-operator">{{ item.operatorName }} ({{ item.operatorRole === 'worker' ? '师傅' : (item.operatorRole === 'leader' ? '主管' : (item.operatorRole === 'service' ? '客服' : '管理')) }})</view>
         </view>
         <view class="log-body">
           <view class="feedback-text">{{ item.content }}</view>
@@ -227,7 +227,7 @@
       <view class="log-item" wx:for="{{ order.paymentLogs }}" wx:key="id">
         <view class="log-header">
           <view class="log-time">{{ item.timeFormatted || item.time }}</view>
-          <view class="log-operator">{{ item.operatorName }} ({{ item.operatorRole === 'worker' ? '师傅' : '管理' }})</view>
+          <view class="log-operator">{{ item.operatorName }} ({{ item.operatorRole === 'worker' ? '师傅' : (item.operatorRole === 'leader' ? '主管' : (item.operatorRole === 'service' ? '客服' : '管理')) }})</view>
         </view>
         
         <view class="log-body">
@@ -301,14 +301,14 @@
     </view>
   </view>
 
-  <!-- 8. 弹窗：取消工单 -->
+  <!-- 8. 弹窗：取消工单（客服退单专用） -->
   <view class="modal-mask" wx:if="{{ showCancelModal }}">
     <view class="modal-box">
-      <view class="modal-title font-red">❌ 取消工单确认</view>
-      <view class="cancel-tips">取消后工单将自动归类到【未成单】归档，请务必填写取消原因：</view>
+      <view class="modal-title font-red">❌ 客服取消工单确认</view>
+      <view class="cancel-tips">取消后将记为【客服退单】归档，不影响师傅现场业绩，请填写退单理由：</view>
       
       <view class="field-item mt-10">
-        <text class="field-label required">取消理由：</text>
+        <text class="field-label required">退单理由：</text>
         <textarea 
           class="modal-textarea" 
           placeholder="如：客户临时不需要维修、重复下单、电话无法接通等..." 
@@ -482,14 +482,14 @@
     </view>
   </view>
 
-  <!-- 12. 弹窗：师傅未成单确认 -->
+  <!-- 12. 弹窗：师傅/主管现场未成单确认 -->
   <view class="modal-mask" wx:if="{{ showFailModal }}">
     <view class="modal-box">
-      <view class="modal-title font-red">⚠️ 标记未成单确认</view>
-      <view class="cancel-tips">标记后工单将归入【未成单】归档，请务必如实填写未成单原因：</view>
+      <view class="modal-title font-red">⚠️ 标记现场未成单确认</view>
+      <view class="cancel-tips">标记后将记为【现场未成单】归档，计入现场履约流失，请填写原因：</view>
       
       <view class="field-item mt-10">
-        <text class="field-label required">未成单理由：</text>
+        <text class="field-label required">未成理由：</text>
         <textarea 
           class="modal-textarea" 
           placeholder="如：客户不在家且拒接电话、现场情况与报修严重不符无配件等..." 

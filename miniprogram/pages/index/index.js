@@ -4,6 +4,10 @@ function checkIsAdmin(user) {
   return Boolean(user && user.role === 'admin');
 }
 
+function checkCanAssign(user) {
+  return Boolean(user && user.role === 'leader');
+}
+
 Page({
   data: {
     currentUser: null,
@@ -15,7 +19,6 @@ Page({
     userVisibleCities: ['天津', '北京'],
     selectedCityFilter: 'all',
 
-    // 默认选中 'today'（今日）
     timeFilterType: 'today',
     customDateText: '',
     customDateValue: '',
@@ -62,6 +65,10 @@ Page({
 
     showEditUserModal: false,
     editingUser: null,
+    editUserName: '',
+    editUserPhone: '',
+    editUserRole: 'worker',
+    editUserIsTest: false,
     editUserCities: [],
     editUserCitiesMap: {},
     editUserGroupId: ''
@@ -102,13 +109,13 @@ Page({
       }
       this.updateUserVisibleCities();
       this.fetchOrders();
-      if (checkIsAdmin(cachedUser)) {
+      if (checkCanAssign(cachedUser)) {
         this.fetchCandidateWorkers();
       }
     } else if (this.data.currentUser) {
       this.updateUserVisibleCities();
       this.fetchOrders();
-      if (checkIsAdmin(this.data.currentUser)) {
+      if (checkCanAssign(this.data.currentUser)) {
         this.fetchCandidateWorkers();
       }
     }
@@ -116,18 +123,21 @@ Page({
 
   fetchCandidateWorkers() {
     const db = wx.cloud.database();
-    db.collection('users').where({ role: 'worker' }).get().then(res => {
+    const _ = db.command;
+    db.collection('users').where({
+      role: _.in(['worker', 'leader'])
+    }).get().then(res => {
       const workers = res.data || [];
       this.setData({
         candidateWorkers: workers,
-        candidateWorkerNames: ['请选择师傅', ...workers.map(w => w.name + (w.groupId ? ` (${w.groupId})` : ''))]
+        candidateWorkerNames: ['请选择师傅', ...workers.map(w => w.name + (w.role === 'leader' ? ' [主管]' : '') + (w.groupId ? ` (${w.groupId})` : ''))]
       });
     }).catch(e => console.error('获取师傅列表失败：', e));
   },
 
   toggleBatchMode() {
-    if (!checkIsAdmin(this.data.currentUser)) {
-      return wx.showToast({ title: '仅限管理员使用批量派单', icon: 'none' });
+    if (!checkCanAssign(this.data.currentUser)) {
+      return wx.showToast({ title: '仅限主管使用批量派单', icon: 'none' });
     }
     const nextMode = !this.data.isBatchMode;
     this.setData({
@@ -144,6 +154,11 @@ Page({
     const id = e.currentTarget.dataset.id;
     if (!id) return;
 
+    const order = (this.data.orders || []).find(o => o._id === id);
+    if (order && (order.status === '已完工' || order.status === '未成单')) {
+      return wx.showToast({ title: '已结单/归档工单不可派单', icon: 'none' });
+    }
+
     const map = { ...this.data.selectedOrderMap };
     map[id] = !map[id];
 
@@ -159,10 +174,14 @@ Page({
   },
 
   selectAllOrders() {
-    const list = this.data.filteredOrders || [];
+    const list = (this.data.filteredOrders || []).filter(o => o.status !== '已完工' && o.status !== '未成单');
     const currentIds = this.data.selectedOrderIds || [];
 
-    if (currentIds.length === list.length && list.length > 0) {
+    if (list.length === 0) {
+      return wx.showToast({ title: '无待派单或进行中工单', icon: 'none' });
+    }
+
+    if (currentIds.length === list.length) {
       this.setData({
         selectedOrderMap: {},
         selectedOrderIds: []
@@ -185,6 +204,10 @@ Page({
   },
 
   async onBatchAssignWorker(e) {
+    if (!checkCanAssign(this.data.currentUser)) {
+      return wx.showToast({ title: '仅限主管使用批量派单', icon: 'none' });
+    }
+
     const idx = Number(e.detail.value) - 1;
     const worker = this.data.candidateWorkers[idx];
     const orderIds = this.data.selectedOrderIds;
@@ -196,7 +219,6 @@ Page({
       return wx.showToast({ title: '请先勾选需要派单的工单', icon: 'none' });
     }
 
-    // 🌟 方案1核心校验：在提交批量派单前，校验所选师傅的管辖城市是否与勾选工单城市相符
     const selectedOrders = (this.data.orders || []).filter(o => orderIds.includes(o._id));
     const orderCities = [...new Set(selectedOrders.map(o => o.city).filter(Boolean))];
 
@@ -212,7 +234,7 @@ Page({
       if (hasMismatch) {
         return wx.showModal({
           title: '❌ 派单城市冲突',
-          content: `所选师傅【${worker.name}】（管辖城市：${workerCities.join('/')}）与您勾选的工单城市（${orderCities.join('/')}）不匹配，禁止跨城市派单！`,
+          content: `所选人员【${worker.name}】（管辖城市：${workerCities.join('/')}）与您勾选的工单城市（${orderCities.join('/')}）不匹配，禁止跨城市派单！`,
           showCancel: false
         });
       }
@@ -339,7 +361,7 @@ Page({
 
     if (checkIsAdmin(user)) {
       this.setData({ userVisibleCities: all });
-    } else if (user.role === 'service') {
+    } else if (user.role === 'service' || user.role === 'leader') {
       const myCities = Array.isArray(user.cities) ? user.cities : [];
       const visible = all.filter(c => myCities.includes(c));
       this.setData({ userVisibleCities: visible.length > 0 ? visible : all });
@@ -358,7 +380,7 @@ Page({
     }, () => {
       this.updateUserVisibleCities();
       this.fetchOrders();
-      if (checkIsAdmin(user)) {
+      if (checkCanAssign(user)) {
         this.fetchCandidateWorkers();
       }
     });
@@ -529,7 +551,7 @@ Page({
         roleFiltered = allOrders.filter(o => 
           o.workerName === user.name && (!o.city || userCities.includes(o.city))
         );
-      } else if (user.role === 'service') {
+      } else if (user.role === 'service' || user.role === 'leader') {
         roleFiltered = allOrders.filter(o => 
           !o.city || userCities.includes(o.city)
         );
@@ -549,7 +571,7 @@ Page({
     const { orders, currentTab, searchKey, selectedCityFilter, currentUser, timeFilterType, customDateValue } = this.data;
     let list = [...orders];
 
-    if (currentUser && (checkIsAdmin(currentUser) || currentUser.role === 'service') && selectedCityFilter !== 'all') {
+    if (currentUser && (checkIsAdmin(currentUser) || currentUser.role === 'service' || currentUser.role === 'leader') && selectedCityFilter !== 'all') {
       list = list.filter(o => o.city === selectedCityFilter);
     }
 
@@ -599,8 +621,9 @@ Page({
         const orderDateFormatted = parseOrderDateStr(tField, currentYear);
         if (!orderDateFormatted) return false;
 
+        // 仅精准展示“今日”预约工单，不再并入历史过期的待派单
         if (timeFilterType === 'today') {
-          return orderDateFormatted === todayStr || (o.status === '待派单' && orderDateFormatted < todayStr);
+          return orderDateFormatted === todayStr;
         } else if (timeFilterType === 'tomorrow') {
           return orderDateFormatted === tomorrowStr;
         } else if (timeFilterType === 'week') {
@@ -680,6 +703,9 @@ Page({
   
   goToCreate() {
     if (this._isNavigating) return;
+    if (this.data.currentUser && this.data.currentUser.role === 'admin') {
+      return wx.showToast({ title: '管理员无录单权限', icon: 'none' });
+    }
     this._isNavigating = true;
     wx.navigateTo({
       url: '/pages/create/create',
@@ -863,6 +889,9 @@ Page({
     const groupId = (this.data.newUserGroupId || '').trim();
     const isTest = Boolean(this.data.newUserIsTest);
 
+    if (role === 'admin') {
+      return wx.showToast({ title: '禁止增加管理员权限', icon: 'none' });
+    }
     if (!name) return wx.showToast({ title: '请输入姓名', icon: 'none' });
     if (!phone || phone.length !== 11) return wx.showToast({ title: '请输入11位手机号', icon: 'none' });
     if (!cities || cities.length === 0) return wx.showToast({ title: '请至少分配一个城市', icon: 'none' });
@@ -875,7 +904,7 @@ Page({
       if (checkRes.data && checkRes.data.length > 0) {
         wx.hideLoading();
         const existing = checkRes.data[0];
-        const existingRole = existing.role === 'admin' ? '管理' : (existing.role === 'service' ? '客服' : '师傅');
+        const existingRole = existing.role === 'admin' ? '管理' : (existing.role === 'leader' ? '主管' : (existing.role === 'service' ? '客服' : '师傅'));
         return wx.showModal({
           title: '手机号冲突',
           content: `该手机号已被【${existing.name || '员工'}】（${existingRole}）占用！不可重复录入。`,
@@ -935,6 +964,10 @@ Page({
     this.setData({
       showEditUserModal: true,
       editingUser: user,
+      editUserName: user.name || '',
+      editUserPhone: user.phone || '',
+      editUserRole: user.role || 'worker',
+      editUserIsTest: Boolean(user.isTest),
       editUserCities: citiesArr,
       editUserCitiesMap: map,
       editUserGroupId: user.groupId || ''
@@ -946,6 +979,18 @@ Page({
       showEditUserModal: false,
       editingUser: null
     });
+  },
+
+  onEditUserNameInput(e) {
+    this.setData({ editUserName: (e.detail.value || '').trim() });
+  },
+
+  onEditUserPhoneInput(e) {
+    this.setData({ editUserPhone: (e.detail.value || '').trim() });
+  },
+
+  onEditUserRoleChange(e) {
+    this.setData({ editUserRole: e.detail.value });
   },
 
   onEditUserCitiesChange(e) {
@@ -964,26 +1009,56 @@ Page({
     });
   },
 
+  onEditUserIsTestChange(e) {
+    this.setData({ editUserIsTest: e.detail.value });
+  },
+
   async submitEditUser() {
     if (!checkIsAdmin(this.data.currentUser)) {
       return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
     }
-    const { editingUser, editUserCities, editUserGroupId } = this.data;
+    const { editingUser, editUserName, editUserPhone, editUserRole, editUserCities, editUserGroupId, editUserIsTest } = this.data;
     if (!editingUser) return;
 
+    const name = (editUserName || '').trim();
+    const phone = (editUserPhone || '').trim();
+
+    if (!name) return wx.showToast({ title: '请输入姓名', icon: 'none' });
+    if (!phone || phone.length !== 11) return wx.showToast({ title: '请输入11位手机号', icon: 'none' });
     if (!editUserCities || editUserCities.length === 0) {
       return wx.showToast({ title: '请至少保留一个城市', icon: 'none' });
     }
 
-    const isWorker = editingUser.role === 'worker';
-    const updateData = {
-      cities: editUserCities,
-      groupId: isWorker ? editUserGroupId : ''
-    };
-
+    const db = wx.cloud.database();
     wx.showLoading({ title: '正在保存...' });
 
     try {
+      if (phone !== editingUser.phone) {
+        const checkRes = await db.collection('users').where({ phone: phone }).get();
+        const conflict = (checkRes.data || []).find(u => u._id !== editingUser._id);
+        if (conflict) {
+          wx.hideLoading();
+          const existingRole = conflict.role === 'admin' ? '管理' : (conflict.role === 'leader' ? '主管' : (conflict.role === 'service' ? '客服' : '师傅'));
+          return wx.showModal({
+            title: '手机号冲突',
+            content: `该手机号已被【${conflict.name || '员工'}】（${existingRole}）占用！`,
+            showCancel: false
+          });
+        }
+      }
+
+      const finalRole = editingUser.role === 'admin' ? 'admin' : editUserRole;
+      const isWorker = finalRole === 'worker';
+
+      const updateData = {
+        name: name,
+        phone: phone,
+        role: finalRole,
+        cities: editUserCities,
+        groupId: isWorker ? (editUserGroupId || '').trim() : '',
+        isTest: Boolean(editUserIsTest)
+      };
+
       const res = await wx.cloud.callFunction({
         name: 'manageOrder',
         data: {

@@ -19,9 +19,10 @@
     <view class="form-item">
       <text class="form-label required">服务城市与地址</text>
       <view class="address-row">
-        <picker bindchange="onCityChange" value="{{ cityIndex }}" range="{{ permittedCities }}">
+        <!-- 修正：绑定 availableCities -->
+        <picker bindchange="onCityChange" value="{{ cityIndex }}" range="{{ availableCities }}">
           <view class="city-picker-btn">
-            <text>{{ permittedCities[cityIndex] || '城市' }}</text>
+            <text>{{ availableCities[cityIndex] || '城市' }}</text>
             <text class="arrow-down">▼</text>
           </view>
         </picker>
@@ -56,8 +57,8 @@
       </view>
     </view>
 
-    <!-- 4. 指派师傅（严格纯英文 admin 可见） -->
-    <view class="form-item" wx:if="{{ currentUser && currentUser.role === 'admin' }}">
+    <!-- 4. 指派师傅（修正：开放给拥有派单权的主管） -->
+    <view class="form-item" wx:if="{{ currentUser && currentUser.role === 'leader' }}">
       <text class="form-label">指派师傅</text>
       <picker bindchange="onWorkerChange" value="{{ workerIndex }}" range="{{ workerNames }}">
         <view class="picker-inner">
@@ -73,9 +74,10 @@
     <!-- 5. 订单来源 -->
     <view class="form-item">
       <text class="form-label">订单来源</text>
-      <picker bindchange="onSourceChange" value="{{ sourceIndex }}" range="{{ sourceOptions }}">
+      <!-- 修正：绑定 sourceNames -->
+      <picker bindchange="onSourceChange" value="{{ sourceIndex }}" range="{{ sourceNames }}">
         <view class="picker-inner">
-          <text class="picker-text text-bold">{{ sourceOptions[sourceIndex] || '请选择订单来源' }}</text>
+          <text class="picker-text text-bold">{{ sourceNames[sourceIndex] || '请选择订单来源' }}</text>
           <text class="arrow-down">▼</text>
         </view>
       </picker>
@@ -84,11 +86,12 @@
     <!-- 6. 初始回馈/备注 -->
     <view class="form-item">
       <text class="form-label">初始回馈 / 备注</text>
+      <!-- 修正：绑定 feedback 与 onFeedbackInput -->
       <textarea 
         class="form-textarea" 
         placeholder="录入客户特殊要求、现场注意事项、初次沟通进展等（选填）" 
-        value="{{ initialFeedback }}" 
-        bindinput="onInitialFeedbackInput" 
+        value="{{ feedback }}" 
+        bindinput="onFeedbackInput" 
       />
     </view>
 

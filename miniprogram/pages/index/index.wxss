@@ -57,6 +57,7 @@
     border-radius: 6rpx;
   }
   .role-admin { background: #fee2e2; color: #ef4444; }
+  .role-leader { background: #ede9fe; color: #7c3aed; }
   .role-service { background: #e0f2fe; color: #0284c7; }
   .role-worker { background: #fef3c7; color: #d97706; }
   .role-unbound { background: #f3f4f6; color: #6b7280; }
@@ -84,7 +85,6 @@
     padding: 2rpx 12rpx;
     border-radius: 6rpx;
   }
-  
   
   /* ==========================================================
      城市筛选胶囊栏
@@ -124,7 +124,6 @@
     color: #ffffff !important;
     border-color: #07c160 !important;
   }
-  
   
   /* ==========================================================
      顶部 4 个按钮同行排布
@@ -175,7 +174,6 @@
     color: #475569 !important;
     border: 1rpx solid #e2e8f0 !important;
   }
-  
   
   /* ==========================================================
      工单状态 Tab 栏与时间维度筛选栏
@@ -278,7 +276,6 @@
     font-size: 26rpx;
     border: 1rpx solid #e5e7eb;
   }
-  
   
   /* ==========================================================
      订单卡片样式
@@ -389,7 +386,6 @@
     font-size: 28rpx;
   }
   
-  
   /* ==========================================================
      弹窗与管理中心样式
      ========================================================== */
@@ -447,7 +443,7 @@
   }
   
   .modal-scroll-area {
-    max-height: 520rpx !important;
+    max-height: 540rpx !important;
     width: 100%;
     box-sizing: border-box;
     padding-right: 4rpx;
@@ -509,6 +505,7 @@
     font-weight: normal;
   }
   .b-admin { background: #fee2e2; color: #ef4444; }
+  .b-leader { background: #ede9fe; color: #7c3aed; }
   .b-service { background: #e0f2fe; color: #0284c7; }
   .b-worker { background: #fef3c7; color: #d97706; }
   
@@ -573,6 +570,32 @@
   }
   
   .test-switch-tip {
+    font-size: 22rpx;
+    color: #94a3b8;
+    margin-top: 4rpx;
+  }
+  
+  /* 微信绑定与解绑管理 */
+  .bind-status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8rpx;
+    background: #f8fafc;
+    padding: 12rpx 16rpx;
+    border-radius: 8rpx;
+    border: 1rpx solid #e2e8f0;
+  }
+  
+  .btn-unbind {
+    background-color: #fee2e2 !important;
+    color: #ef4444 !important;
+    font-size: 24rpx !important;
+    margin: 0 !important;
+    padding: 4rpx 16rpx !important;
+  }
+  
+  .self-tip {
     font-size: 22rpx;
     color: #94a3b8;
     margin-top: 4rpx;
@@ -683,6 +706,12 @@
   .modal-btn.cancel {
     background: #f1f5f9;
     color: #64748b;
+  }
+  
+  .modal-btn.confirm {
+    background: #07c160;
+    color: #ffffff;
+    font-weight: 500;
   }
   
   /* 底部悬浮条 */

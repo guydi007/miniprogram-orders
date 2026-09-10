@@ -40,6 +40,11 @@ Page({
     order: null,
     currentUser: null,
 
+    isLeader: false,
+    isServiceOrLeader: false,
+    isWorkerOrLeader: false,
+    canOperateSettle: false,
+
     candidateWorkers: [],
     candidateWorkerNames: [],
 
@@ -74,9 +79,25 @@ Page({
     feedbackPhotos: []
   },
 
+  updatePermissions(order, user) {
+    const role = user ? user.role : '';
+    const isLeader = role === 'leader';
+    const isServiceOrLeader = role === 'admin' || role === 'service' || role === 'leader';
+    const isWorkerOrLeader = role === 'worker' || role === 'leader';
+    const canOperateSettle = isLeader || (role === 'worker' && order && user && order.workerName === user.name);
+
+    this.setData({
+      currentUser: user,
+      isLeader,
+      isServiceOrLeader,
+      isWorkerOrLeader,
+      canOperateSettle
+    });
+  },
+
   onLoad(options) {
     const user = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
-    this.setData({ currentUser: user });
+    this.updatePermissions(null, user);
 
     if (options && options.id) {
       this.setData({ orderId: options.id });
@@ -86,7 +107,7 @@ Page({
 
   onShow() {
     const user = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
-    this.setData({ currentUser: user });
+    this.updatePermissions(this.data.order, user);
   },
 
   fetchOrderDetail(id) {
@@ -126,9 +147,10 @@ Page({
       }
 
       this.setData({ order: order });
+      this.updatePermissions(order, this.data.currentUser);
 
       const user = this.data.currentUser;
-      if (user && user.role === 'admin') {
+      if (user && user.role === 'leader') {
         this.fetchCandidateWorkers(order.city);
       }
     }).catch(err => {
@@ -140,9 +162,10 @@ Page({
 
   fetchCandidateWorkers(city) {
     const db = wx.cloud.database();
+    const _ = db.command;
 
     db.collection('users').where({
-      role: 'worker'
+      role: _.in(['worker', 'leader'])
     }).get().then(res => {
       const all = res.data || [];
       const cleanCity = (city || '').trim();
@@ -164,12 +187,16 @@ Page({
 
       this.setData({
         candidateWorkers: matched,
-        candidateWorkerNames: matched.map(w => w.name + (w.groupId ? ` (${w.groupId})` : ''))
+        candidateWorkerNames: matched.map(w => w.name + (w.role === 'leader' ? ' [主管]' : '') + (w.groupId ? ` (${w.groupId})` : ''))
       });
     }).catch(e => console.error('获取师傅列表失败：', e));
   },
 
   async onAssignWorker(e) {
+    if (!this.data.isLeader) {
+      return wx.showToast({ title: '仅限主管指派师傅', icon: 'none' });
+    }
+
     const idx = Number(e.detail.value);
     const worker = this.data.candidateWorkers[idx];
     if (!worker) {
@@ -197,13 +224,13 @@ Page({
       wx.hideLoading();
       const result = res.result || {};
       if (result.success) {
-        // 🌟 核心改动：直接更新页面绑定的工单字段，不触发带遮罩的二次拉取，彻底解决“页面无变化”与提示冲突
         this.setData({
           'order.workerName': updateData.workerName,
           'order.workerPhone': updateData.workerPhone,
           'order.workerGroupId': updateData.workerGroupId,
           'order.status': updateData.status
         });
+        this.updatePermissions(this.data.order, this.data.currentUser);
         wx.showToast({ title: '指派成功', icon: 'success' });
       } else {
         const errMsg = result.error ? (result.error.errMsg || JSON.stringify(result.error)) : (result.msg || '更新未生效');
@@ -372,6 +399,7 @@ Page({
     this.setData({ cancelReason: e.detail.value.trim() });
   },
 
+  // 客服取消订单：打上 service_cancel 标识
   async submitCancelOrder() {
     const reason = this.data.cancelReason;
     if (!reason) {
@@ -386,9 +414,9 @@ Page({
       id: 'fb_' + Date.now(),
       time: now.toISOString(),
       timeFormatted: formatDateTime(now),
-      operatorName: (currentUser && currentUser.name) || '员工',
-      operatorRole: (currentUser && currentUser.role) || 'admin',
-      content: `[工单取消] 理由：${reason}`,
+      operatorName: (currentUser && currentUser.name) || '客服',
+      operatorRole: 'service',
+      content: `[客服退单取消] 理由：${reason}`,
       photos: []
     };
 
@@ -397,8 +425,9 @@ Page({
 
     const updateData = {
       status: '未成单',
+      uncompletedType: 'service_cancel',
       cancelReason: reason,
-      cancelOperator: (currentUser && currentUser.name) || '员工',
+      cancelOperator: (currentUser && currentUser.name) || '客服',
       cancelTime: now.toISOString(),
       feedbacks: updatedFeedbacks
     };
@@ -417,7 +446,7 @@ Page({
       const result = res.result || {};
       if (result.success) {
         this.setData({ showCancelModal: false });
-        wx.showToast({ title: '工单已取消并归档', icon: 'success' });
+        wx.showToast({ title: '工单已退单归档', icon: 'success' });
         this.fetchOrderDetail(this.data.orderId);
       } else {
         wx.showToast({ title: '取消失败，请重试', icon: 'none' });
@@ -444,6 +473,7 @@ Page({
     this.setData({ failReason: e.detail.value.trim() });
   },
 
+  // 师傅/主管现场未成单：打上 worker_fail 标识
   async submitFailOrder() {
     const reason = this.data.failReason;
     if (!reason) {
@@ -453,14 +483,15 @@ Page({
     wx.showLoading({ title: '正在归档未成单...' });
     const now = new Date();
     const currentUser = this.data.currentUser;
+    const opRole = (currentUser && currentUser.role === 'leader') ? '主管' : '师傅';
 
     const failFeedback = {
       id: 'fb_' + Date.now(),
       time: now.toISOString(),
       timeFormatted: formatDateTime(now),
-      operatorName: (currentUser && currentUser.name) || '师傅',
+      operatorName: (currentUser && currentUser.name) || opRole,
       operatorRole: (currentUser && currentUser.role) || 'worker',
-      content: `[师傅标记未成单] 理由：${reason}`,
+      content: `[现场标记未成单] 理由：${reason}`,
       photos: []
     };
 
@@ -469,8 +500,9 @@ Page({
 
     const updateData = {
       status: '未成单',
+      uncompletedType: 'worker_fail',
       failReason: reason,
-      failOperator: (currentUser && currentUser.name) || '师傅',
+      failOperator: (currentUser && currentUser.name) || opRole,
       failTime: now.toISOString(),
       feedbacks: updatedFeedbacks
     };
@@ -688,11 +720,12 @@ Page({
       }
 
       const now = new Date();
+      const opRole = (currentUser && currentUser.role === 'leader') ? '主管' : '师傅';
       const newLog = {
         id: 'log_' + Date.now(),
         time: now.toISOString(),
         timeFormatted: formatDateTime(now),
-        operatorName: (currentUser && currentUser.name) || '员工',
+        operatorName: (currentUser && currentUser.name) || opRole,
         operatorRole: (currentUser && currentUser.role) || 'worker',
         settleType: settleMode === 'full' ? '全款' : '预付款',
         cashAmount: cash,

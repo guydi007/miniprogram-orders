@@ -1,152 +1,223 @@
 <view class="container">
-  <!-- 1. 顶部控制栏：周期切换、区间选定与师傅筛选 -->
-  <view class="card filter-card">
-    <!-- 周期快捷切换 -->
-    <view class="period-tabs">
-      <view class="period-btn {{ currentPeriod === 'today' ? 'period-active' : '' }}" bindtap="switchPeriod" data-period="today">今日</view>
-      <view class="period-btn {{ currentPeriod === 'month' ? 'period-active' : '' }}" bindtap="switchPeriod" data-period="month">本月</view>
-      <view class="period-btn {{ currentPeriod === 'year' ? 'period-active' : '' }}" bindtap="switchPeriod" data-period="year">本年</view>
-      <view class="period-btn {{ currentPeriod === 'custom' ? 'period-active' : '' }}" bindtap="switchPeriod" data-period="custom">📅 自定义</view>
-    </view>
+  <!-- 1. 城市地区权限切换胶囊栏 -->
+  <view class="admin-city-bar" wx:if="{{ userVisibleCities.length > 0 }}">
+    <scroll-view scroll-x class="city-scroll" enable-flex>
+      <view 
+        class="city-chip {{ selectedCityFilter === 'all' ? 'city-chip-active' : '' }}" 
+        bindtap="onCityFilterChange" 
+        data-city="all"
+        wx:if="{{ currentUser && currentUser.role === 'admin' }}"
+      >
+        全部城市
+      </view>
+      <view 
+        class="city-chip {{ selectedCityFilter === item ? 'city-chip-active' : '' }}" 
+        wx:for="{{ userVisibleCities }}" 
+        wx:key="*this" 
+        bindtap="onCityFilterChange" 
+        data-city="{{ item }}"
+      >
+        {{ item }}
+      </view>
+    </scroll-view>
+  </view>
 
-    <!-- 自定义日期区间选择器（选中自定义时展开） -->
-    <view class="date-range-box" wx:if="{{ currentPeriod === 'custom' }}">
-      <view class="date-picker-wrap">
-        <text class="date-label">起始：</text>
-        <picker mode="date" value="{{ startDate }}" bindchange="onStartDateChange">
-          <view class="date-val-btn">{{ startDate }} 📅</view>
+  <!-- 2. 顶部大标签切换栏（财务营收 vs 客服录单） -->
+  <view class="card main-tab-card">
+    <view class="main-tabs">
+      <view class="main-tab-item {{currentSubTab === 'revenue' ? 'active' : ''}}" bindtap="switchSubTab" data-tab="revenue">
+        💰 财务营收看板
+      </view>
+      <view class="main-tab-item {{currentSubTab === 'service' ? 'active' : ''}}" bindtap="switchSubTab" data-tab="service">
+        📞 客服录单统计
+      </view>
+    </view>
+  </view>
+
+  <!-- ================= 页面一：财务营收板块 ================= -->
+  <block wx:if="{{currentSubTab === 'revenue'}}">
+    <!-- 时间与师傅筛选 -->
+    <view class="card filter-card">
+      <view class="filter-tabs">
+        <view class="tab-item {{revenueTimeFilterType === 'today' ? 'active' : ''}}" bindtap="onRevenueTimeChange" data-type="today">今日</view>
+        <view class="tab-item {{revenueTimeFilterType === 'month' ? 'active' : ''}}" bindtap="onRevenueTimeChange" data-type="month">本月</view>
+        <view class="tab-item {{revenueTimeFilterType === 'year' ? 'active' : ''}}" bindtap="onRevenueTimeChange" data-type="year">本年</view>
+        <picker mode="date" value="{{revenueCustomDateValue}}" bindchange="onRevenueCustomDateChange" class="picker-tab">
+          <view class="tab-item {{revenueTimeFilterType === 'custom' ? 'active' : ''}}">
+            {{revenueTimeFilterType === 'custom' ? revenueCustomDateValue : '自定义'}}
+          </view>
         </picker>
       </view>
-      <text class="range-separator">至</text>
-      <view class="date-picker-wrap">
-        <text class="date-label">截止：</text>
-        <picker mode="date" value="{{ endDate }}" bindchange="onEndDateChange">
-          <view class="date-val-btn">{{ endDate }} 📅</view>
+
+      <view class="picker-filter-row">
+        <picker mode="selector" range="{{workerFilterNames}}" value="{{workerFilterIndex}}" bindchange="onWorkerFilterChange" class="sub-picker">
+          <view class="picker-box">👷 {{workerFilterNames[workerFilterIndex]}} ▾</view>
         </picker>
       </view>
     </view>
 
-    <!-- 师傅筛选行 -->
-    <view class="worker-filter-row">
-      <text class="filter-label">筛选师傅：</text>
-      <picker bindchange="onWorkerChange" range="{{ workerOptions }}">
-        <view class="picker-value">
-          <text>{{ selectedWorkerName }}</text>
-          <text class="arrow">▼</text>
+    <!-- 营业额与收款总览 -->
+    <view class="card">
+      <view class="section-title">💰 营业额与收款总览</view>
+      
+      <!-- 顶部通栏大卡片：实收营业总额（纯现金到账） -->
+      <view class="total-revenue-box">
+        <text class="label">实收营业总额 (元)</text>
+        <text class="value">¥{{statsData.totalRevenue}}</text>
+      </view>
+      
+      <!-- 第 1 行（4项网格）：微信支付 ｜ 支付宝 ｜ 现金收款 ｜ 待收尾款 -->
+      <view class="four-grid-row">
+        <view class="grid-item">
+          <text class="sub-val">¥{{statsData.wechatRevenue}}</text>
+          <text class="sub-label">微信支付</text>
         </view>
-      </picker>
-    </view>
-  </view>
-
-  <!-- 2. 核心营收看板卡片 -->
-  <view class="card revenue-card">
-    <view class="revenue-header">
-      <text class="revenue-title">💰 实收总营业额</text>
-      <text class="period-badge">{{ periodText }}</text>
-    </view>
-    
-    <view class="revenue-main-val">
-      <text class="currency">¥</text>
-      <text class="amount-num">{{ stats.paidTotal }}</text>
-    </view>
-
-    <!-- 支付方式拆解（防折行、自适应大额款项） -->
-    <view class="pay-method-grid">
-      <view class="pay-method-item">
-        <view class="method-title">
-          <text class="dot dot-wechat"></text>
-          <text>微信支付</text>
+        <view class="grid-item">
+          <text class="sub-val">¥{{statsData.alipayRevenue}}</text>
+          <text class="sub-label">支付宝</text>
         </view>
-        <view class="method-amount">
-          <text class="cur">¥</text>
-          <text class="num">{{ stats.wechatTotal }}</text>
+        <view class="grid-item">
+          <text class="sub-val">¥{{statsData.cashRevenue}}</text>
+          <text class="sub-label">现金收款</text>
+        </view>
+        <view class="grid-item">
+          <text class="sub-val text-orange">¥{{statsData.pendingBalance}}</text>
+          <text class="sub-label">待收尾款</text>
         </view>
       </view>
 
-      <view class="pay-method-item">
-        <view class="method-title">
-          <text class="dot dot-alipay"></text>
-          <text>支付宝</text>
-        </view>
-        <view class="method-amount">
-          <text class="cur">¥</text>
-          <text class="num">{{ stats.alipayTotal }}</text>
-        </view>
-      </view>
+      <!-- 分割线 -->
+      <view class="divider"></view>
 
-      <view class="pay-method-item">
-        <view class="method-title">
-          <text class="dot dot-cash"></text>
-          <text>现金收款</text>
+      <!-- 第 2 行（4 项横排）：完工单数 ｜ 现场未成 ｜ 待成单数 ｜ 平均客单价 -->
+      <view class="four-grid-row">
+        <view class="grid-item">
+          <text class="num text-green">{{statsData.completedCount}}</text>
+          <text class="txt">完工单数</text>
         </view>
-        <view class="method-amount">
-          <text class="cur">¥</text>
-          <text class="num">{{ stats.cashTotal }}</text>
+        <view class="grid-item">
+          <text class="num text-red">{{statsData.uncompletedCount}}</text>
+          <text class="txt">现场未成</text>
+        </view>
+        <view class="grid-item">
+          <text class="num text-blue">{{statsData.pendingSettleCount}}</text>
+          <text class="txt">待成单数</text>
+        </view>
+        <view class="grid-item">
+          <text class="num">¥{{statsData.avgOrderPrice}}</text>
+          <text class="txt">平均客单价</text>
         </view>
       </view>
     </view>
 
-    <!-- 附属指标：待收尾款、完工单数、未成单数、客单价 -->
-    <view class="sub-metrics-grid">
-      <view class="metric-col">
-        <text class="m-lbl">待收尾款</text>
-        <text class="m-val font-red">¥{{ stats.balanceTotal }}</text>
-      </view>
-      <view class="metric-col">
-        <text class="m-lbl">完工单数</text>
-        <text class="m-val">{{ stats.dealCount }} 单</text>
-      </view>
-      <view class="metric-col">
-        <text class="m-lbl">未成单数</text>
-        <text class="m-val font-gray">{{ stats.failCount }} 单</text>
-      </view>
-      <view class="metric-col">
-        <text class="m-lbl">平均客单价</text>
-        <text class="m-val font-green">¥{{ stats.avgTicket }}</text>
-      </view>
-    </view>
-  </view>
-
-  <!-- 3. 师傅业绩明细列表 -->
-  <view class="card">
-    <view class="card-header">
-      <text class="title">👨‍🔧 师傅业绩贡献榜</text>
-      <text class="sub-title">共 {{ workerStatsList.length }} 位师傅</text>
-    </view>
-
-    <view class="worker-stats-list">
-      <view class="worker-card" wx:for="{{ workerStatsList }}" wx:key="name">
-        <view class="worker-top">
-          <view class="worker-name-box">
-            <text class="rank-num rank-{{ index + 1 }}">{{ index + 1 }}</text>
-            <text class="w-name">{{ item.name }}</text>
+    <!-- 师傅业绩贡献榜 -->
+    <view class="card">
+      <view class="section-title">👷 师傅业绩贡献榜</view>
+      <block wx:if="{{workerRankList.length > 0}}">
+        <view class="worker-item" wx:for="{{workerRankList}}" wx:key="name">
+          <view class="rank-badge {{index === 0 ? 'gold' : (index === 1 ? 'silver' : (index === 2 ? 'bronze' : ''))}}">{{index + 1}}</view>
+          <view class="worker-info">
+            <text class="w-name">{{item.name}}</text>
+            <text class="w-sub">完工: {{item.completed}}单 | 未成: {{item.uncompleted}}单 | 待成: {{item.pendingCount}}单 | 待收: ¥{{item.pending}}</text>
           </view>
-          <view class="w-total">
-            实收：<text class="font-green font-bold">¥ {{ item.paidTotal }}</text>
+          <view class="worker-revenue">
+            <text class="rev-val">¥{{item.revenue}}</text>
           </view>
         </view>
+      </block>
+      <block wx:else>
+        <view class="empty-tip">暂无匹配的师傅结算数据</view>
+      </block>
+    </view>
+  </block>
 
-        <view class="worker-breakdown">
-          <text class="bd-item">微信: ¥{{ item.wechat }}</text>
-          <text class="bd-item">支付宝: ¥{{ item.alipay }}</text>
-          <text class="bd-item">现金: ¥{{ item.cash }}</text>
-        </view>
-
-        <view class="worker-footer">
-          <text>成单: {{ item.dealCount }} 单</text>
-          <text wx:if="{{ item.balanceTotal > 0 }}" class="font-red">在途尾款: ¥{{ item.balanceTotal }}</text>
-          <text class="font-gray">未成单: {{ item.failCount }} 单</text>
-        </view>
+  <!-- ================= 页面二：客服录单板块 ================= -->
+  <block wx:if="{{currentSubTab === 'service'}}">
+    <!-- 时间与录单人筛选 -->
+    <view class="card filter-card">
+      <view class="filter-tabs">
+        <view class="tab-item {{serviceTimeFilterType === 'today' ? 'active' : ''}}" bindtap="onServiceTimeChange" data-type="today">今日</view>
+        <view class="tab-item {{serviceTimeFilterType === 'month' ? 'active' : ''}}" bindtap="onServiceTimeChange" data-type="month">本月</view>
+        <view class="tab-item {{serviceTimeFilterType === 'year' ? 'active' : ''}}" bindtap="onServiceTimeChange" data-type="year">本年</view>
+        <picker mode="date" value="{{serviceCustomDateValue}}" bindchange="onServiceCustomDateChange" class="picker-tab">
+          <view class="tab-item {{serviceTimeFilterType === 'custom' ? 'active' : ''}}">
+            {{serviceTimeFilterType === 'custom' ? serviceCustomDateValue : '自定义'}}
+          </view>
+        </picker>
       </view>
 
-      <view class="empty-stats" wx:if="{{ workerStatsList.length === 0 }}">
-        <text>该周期内暂无结单数据</text>
+      <view class="picker-filter-row">
+        <picker mode="selector" range="{{creatorFilterNames}}" value="{{creatorFilterIndex}}" bindchange="onCreatorFilterChange" class="sub-picker">
+          <view class="picker-box">📞 {{creatorFilterNames[creatorFilterIndex]}} ▾</view>
+        </picker>
       </view>
     </view>
-  </view>
 
-  <!-- 4. 底部固定：一键复制财务报表 -->
-  <view class="bottom-action-bar">
-    <button class="btn-copy-report" bindtap="copyDailyReport">📋 一键复制财务报表发微信群</button>
+    <!-- 客服录单统计看板 -->
+    <view class="card">
+      <view class="section-title">📞 客服签单与录单战报</view>
+
+      <!-- 客服成单总额大卡片 -->
+      <view class="total-revenue-box service-revenue-box">
+        <text class="label">客服锁定签约总额 (元)</text>
+        <text class="value">¥{{serviceStatsSummary.totalRevenueCreated}}</text>
+        <text class="service-sub-tip">已收定金: ¥{{serviceStatsSummary.collectedDeposit}} | 待收尾款: ¥{{serviceStatsSummary.pendingTail}}</text>
+      </view>
+
+      <view class="service-summary-grid">
+        <view class="s-card">
+          <text class="s-num">{{serviceStatsSummary.totalCreated}}</text>
+          <text class="s-txt">录单数</text>
+        </view>
+        <view class="s-card">
+          <text class="s-num">{{serviceStatsSummary.completedCreated}}</text>
+          <text class="s-txt">有效成单</text>
+        </view>
+        <view class="s-card">
+          <text class="s-num text-red">{{serviceStatsSummary.cancelledCreated}}</text>
+          <text class="s-txt">客服退单</text>
+        </view>
+        <view class="s-card">
+          <text class="s-num text-orange">{{serviceStatsSummary.workerFailCreated}}</text>
+          <text class="s-txt">现场未成</text>
+        </view>
+        <view class="s-card">
+          <text class="s-num">{{serviceStatsSummary.sameDayAppoint}}</text>
+          <text class="s-txt">当天约</text>
+        </view>
+        <view class="s-card">
+          <text class="s-num">{{serviceStatsSummary.nextDayAppoint}}</text>
+          <text class="s-txt">次日约</text>
+        </view>
+      </view>
+
+      <!-- 客服明细列表：固定百分比网格 -->
+      <block wx:if="{{serviceRankList.length > 0}}">
+        <view class="sub-title">客服业绩明细排行</view>
+        <view class="service-table">
+          <view class="table-header">
+            <text class="col col-name">客服</text>
+            <text class="col col-num">录单</text>
+            <text class="col col-num">成单</text>
+            <text class="col col-money">成单总额</text>
+            <text class="col col-cancel">退单</text>
+          </view>
+          <view class="table-row" wx:for="{{serviceRankList}}" wx:key="name">
+            <text class="col col-name">{{item.name}}</text>
+            <text class="col col-num">{{item.total}}</text>
+            <text class="col col-num text-green">{{item.completed}}</text>
+            <text class="col col-money text-orange">¥{{item.revenue}}</text>
+            <text class="col col-cancel text-red">{{item.cancelled}}</text>
+          </view>
+        </view>
+      </block>
+    </view>
+  </block>
+
+  <!-- 底部一键复制对应日报按钮 -->
+  <view class="btn-box">
+    <button class="primary-btn" bindtap="copyReport">
+      📋 一键复制{{currentSubTab === 'revenue' ? '财务营收' : '客服录单'}}日报
+    </button>
   </view>
 </view>
