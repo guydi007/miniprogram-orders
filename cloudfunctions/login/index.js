@@ -71,6 +71,11 @@ exports.main = async (event, context) => {
         user.openid = currentOpenid;
       }
 
+      // 切回正式账号时结束当前微信的测试会话，避免后端仍使用测试身份。
+      await db.collection('users').where({
+        isTest: true,
+        testSessionOpenid: currentOpenid
+      }).update({ data: { testSessionOpenid: '', testSessionTime: '' } });
       return {
         success: true,
         user: user

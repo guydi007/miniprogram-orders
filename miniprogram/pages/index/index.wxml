@@ -51,6 +51,14 @@
     </view>
   </view>
 
+  <!-- TODO: 订阅提醒暂不开放；完成模板配置和真机验证后再启用。 -->
+  <view class="card notification-card" wx:if="{{ notificationEntryEnabled && currentUser && (currentUser.role === 'worker' || currentUser.role === 'leader') }}">
+    <button class="notification-subscribe-button" bindtap="subscribeNotifications" loading="{{subscriptionBusy}}" disabled="{{subscriptionBusy}}">订阅微信提醒</button>
+    <view class="notification-description">师傅接收催单，主管接收新工单和催单提醒。需要本人点击订阅，不能一次开启永久接收。</view>
+    <view class="notification-hint" wx:if="{{subscriptionHint}}">{{subscriptionHint}}</view>
+    <view class="notification-hint" wx:if="{{ currentUser.role === 'leader' && !newOrderTemplateConfigured }}">新工单订阅模板尚未配置或正在加载，当前仅可订阅催单提醒。</view>
+  </view>
+
   <!-- 2. 城市过滤筛选栏 -->
   <view class="admin-city-bar" wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === 'service' || currentUser.role === 'leader') && userVisibleCities.length > 0 }}">
     <scroll-view scroll-x class="city-scroll" enable-flex>
@@ -422,6 +430,14 @@
           <view class="test-switch-row mt-16">
             <text class="test-switch-label">🧪 设为免锁测试号：</text>
             <switch checked="{{ editUserIsTest }}" color="#07c160" bindchange="onEditUserIsTestChange" />
+          </view>
+
+          <view class="mt-16" wx:if="{{ editUserRole === 'worker' || editUserRole === 'leader' }}">
+            <text class="field-title">企业微信群机器人 Webhook（密钥，请勿分享）：</text>
+            <input class="modal-input" password="{{true}}" value="{{ editUserWebhookUrl }}"
+              placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…"
+              bindinput="onEditUserWebhookInput" />
+            <text class="field-title">测试账号请配置测试群；群号不能代替机器人地址。</text>
           </view>
 
           <view class="bind-manage-section mt-16">

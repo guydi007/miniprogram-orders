@@ -275,7 +275,12 @@ Page({
       if (!res.result || !res.result.success) throw new Error((res.result && res.result.msg) || '云端拒绝录单');
       wx.hideLoading();
       this.setData({ isSubmitting: false });
-      wx.showToast({ title: '录单成功', icon: 'success' });
+      const notification = res.result.notification;
+      if (notification && notification.success) {
+        wx.showToast({ title: '录单成功，主管已通知', icon: 'none' });
+      } else {
+        await new Promise(resolve => wx.showModal({ title: '工单已保存', content: '主管提醒未全部发送成功，可能未订阅或模板未配置。请联系主管查看，不要重复录单。', showCancel: false, success: resolve, fail: resolve }));
+      }
       setTimeout(() => wx.navigateBack(), 1000);
     } catch (err) {
       console.error('录单异常：', err);

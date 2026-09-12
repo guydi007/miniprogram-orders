@@ -2,6 +2,8 @@ const cloud = require('wx-server-sdk');
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
 const _ = db.command;
+const { parseWebhook } = require('./groupNotifications');
+const { notifyAll, getNotificationConfig } = require('./notifications');
 
 const fields = {
   assign: ['workerName', 'workerPhone', 'workerGroupId'],
@@ -21,15 +23,15 @@ function pick(value, allowed) {
 async function currentUser() {
   const openid = cloud.getWXContext().OPENID;
   if (!openid) return null;
-  const res = await db.collection('users').where({ openid }).limit(1).get();
-  if (res.data && res.data[0]) return res.data[0];
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const testRes = await db.collection('users').where({
     isTest: true,
     testSessionOpenid: openid,
     testSessionTime: _.gt(cutoff)
   }).limit(1).get();
-  return testRes.data && testRes.data[0] || null;
+  if (testRes.data && testRes.data[0]) return testRes.data[0];
+  const res = await db.collection('users').where({ openid }).limit(1).get();
+  return res.data && res.data[0] || null;
 }
 
 const hasRole = (user, roles) => Boolean(user && roles.includes(user.role));
@@ -46,6 +48,10 @@ exports.main = async (event = {}) => {
     const user = await currentUser();
     if (!user) return { success: false, code: 'UNAUTHORIZED', msg: '登录已失效，请重新登录' };
 
+    if (action === 'getNotificationConfig') {
+      return { success: true, templates: getNotificationConfig(user) };
+    }
+
     if (action === 'createOrder') {
       if (!hasRole(user, ['service', 'leader'])) return { success: false, msg: '无录单权限' };
       const payload = pick(data, ['city', 'customerPhone', 'address', 'appointmentTime', 'source', 'workerName', 'workerPhone', 'workerGroupId', 'totalAmount', 'paidAmount', 'pendingBalance', 'feedbacks']);
@@ -53,7 +59,8 @@ exports.main = async (event = {}) => {
       if (payload.city && cities.length && !cities.includes(payload.city)) return { success: false, msg: '无权录入该城市工单' };
       Object.assign(payload, { creatorName: user.name, createTime: new Date().toISOString(), status: payload.workerName ? '已派单' : '待派单' });
       const result = await db.collection('orders').add({ data: payload });
-      return { success: true, orderId: result._id };
+      const notification = await notifyAll(cloud, db, 'newOrder', { ...payload, _id: result._id }, user);
+      return { success: true, orderId: result._id, notification };
     }
 
     if (action === 'batchAssignWorker') {
@@ -70,7 +77,13 @@ exports.main = async (event = {}) => {
       if (!userId) return { success: false, msg: '缺少员工ID' };
       if (action === 'unbindUser') await db.collection('users').doc(userId).update({ data: { openid: '' } });
       else {
-        const payload = pick(data, ['name', 'phone', 'role', 'cities', 'groupId', 'isTest']);
+        const payload = pick(data, ['name', 'phone', 'role', 'cities', 'groupId', 'isTest', 'webhookUrl']);
+        if (payload.webhookUrl !== undefined) {
+          payload.webhookUrl = String(payload.webhookUrl || '').trim();
+          if (payload.webhookUrl) {
+            try { parseWebhook(payload.webhookUrl); } catch (error) { return { success: false, msg: error.message }; }
+          }
+        }
         if (payload.role && !['admin', 'leader', 'service', 'worker'].includes(payload.role)) return { success: false, msg: '角色无效' };
         if (payload.isTest !== undefined) payload.isTest = Boolean(payload.isTest);
         await db.collection('users').doc(userId).update({ data: payload });
@@ -89,7 +102,16 @@ exports.main = async (event = {}) => {
       await db.collection('orders').doc(orderId).update({ data: { ...pick(data, fields.assign), status: '已派单', assignTime: new Date().toISOString() } });
     } else if (action === 'urgent') {
       if (!hasRole(user, ['service', 'leader'])) return { success: false, msg: '无催单权限' };
-      await db.collection('orders').doc(orderId).update({ data: { isUrgent: true, urgentTime: new Date().toISOString() } });
+      if (['已完工', '未成单'].includes(order.status)) return { success: false, msg: '归档工单不可催单' };
+      const now = new Date().toISOString();
+      const cutoff = new Date(Date.now() - 60000).toISOString();
+      const claim = await db.collection('orders').where(_.and([
+        { _id: orderId, status: _.nin(['已完工', '未成单']) },
+        _.or([{ urgentTime: _.exists(false) }, { urgentTime: '' }, { urgentTime: _.lt(cutoff) }])
+      ])).update({ data: { isUrgent: true, urgentTime: now } });
+      if (!claim.stats || claim.stats.updated !== 1) return { success: false, msg: '请勿重复催单，请稍后再试' };
+      const notification = await notifyAll(cloud, db, 'urgent', order, user);
+      return { success: true, notification };
     } else if (action === 'editTime') {
       if (!hasRole(user, ['service', 'leader', 'worker'])) return { success: false, msg: '无改期权限' };
       if (['已完工', '未成单'].includes(order.status)) return { success: false, msg: '归档工单不可改期' };

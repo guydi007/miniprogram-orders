@@ -71,7 +71,14 @@ Page({
     editUserIsTest: false,
     editUserCities: [],
     editUserCitiesMap: {},
-    editUserGroupId: ''
+    editUserGroupId: '',
+    editUserWebhookUrl: '',
+    // TODO: 完善提醒样式、模板和真机验证后，再开放首页订阅入口。
+    notificationEntryEnabled: false,
+    notificationTemplates: [],
+    newOrderTemplateConfigured: false,
+    subscriptionBusy: false,
+    subscriptionHint: ''
   },
 
   onLoad() {
@@ -371,10 +378,14 @@ Page({
     }
     this.setData({
       currentUser: user,
-      showPhoneModal: false
+      showPhoneModal: false,
+      notificationTemplates: [],
+      newOrderTemplateConfigured: false,
+      subscriptionHint: ''
     }, () => {
       this.updateUserVisibleCities();
       this.fetchOrders();
+      this.loadNotificationConfig();
       if (checkCanAssign(user)) {
         this.fetchCandidateWorkers();
       }
@@ -965,7 +976,8 @@ Page({
       editUserIsTest: Boolean(user.isTest),
       editUserCities: citiesArr,
       editUserCitiesMap: map,
-      editUserGroupId: user.groupId || ''
+      editUserGroupId: user.groupId || '',
+      editUserWebhookUrl: user.webhookUrl || ''
     });
   },
 
@@ -1006,6 +1018,44 @@ Page({
 
   onEditUserIsTestChange(e) {
     this.setData({ editUserIsTest: e.detail.value });
+  },
+
+  async loadNotificationConfig() {
+    if (!this.data.notificationEntryEnabled) return;
+    const phone = this.data.currentUser && this.data.currentUser.phone;
+    try {
+      const res = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getNotificationConfig' } });
+      if (!this.data.currentUser || this.data.currentUser.phone !== phone) return;
+      const templates = res.result && res.result.success ? res.result.templates || [] : [];
+      this.setData({ notificationTemplates: templates, newOrderTemplateConfigured: templates.some(item => item.type === 'newOrder') });
+    } catch (error) { this.setData({ subscriptionHint: '订阅配置加载失败，请稍后重试' }); }
+  },
+
+  subscribeNotifications() {
+    if (!this.data.notificationEntryEnabled) return;
+    if (this.data.subscriptionBusy) return;
+    const list = this.data.notificationTemplates || [];
+    if (!list.length) {
+      this.loadNotificationConfig();
+      return wx.showToast({ title: '模板未配置或加载中，请稍后再点', icon: 'none' });
+    }
+    if (!wx.requestSubscribeMessage) return wx.showToast({ title: '请升级微信后再订阅', icon: 'none' });
+    const tmplIds = [...new Set(list.map(item => item.templateId))].slice(0, 3);
+    this.setData({ subscriptionBusy: true });
+    // 直接由用户点击触发，不在此之前等待异步云函数。
+    wx.requestSubscribeMessage({
+      tmplIds,
+      success: res => {
+        const accepted = tmplIds.filter(id => res[id] === 'accept').length;
+        this.setData({ subscriptionHint: accepted ? '本次已接受订阅；普通一次性消息每次授权对应一条提醒' : '未接受订阅，无法保证微信提醒' });
+      },
+      fail: () => this.setData({ subscriptionHint: '订阅未成功，请用手机微信打开后重试' }),
+      complete: () => this.setData({ subscriptionBusy: false })
+    });
+  },
+
+  onEditUserWebhookInput(e) {
+    this.setData({ editUserWebhookUrl: (e.detail.value || '').trim() });
   },
 
   async submitEditUser() {
@@ -1051,7 +1101,8 @@ Page({
         role: finalRole,
         cities: editUserCities,
         groupId: isWorker ? (editUserGroupId || '').trim() : '',
-        isTest: Boolean(editUserIsTest)
+        isTest: Boolean(editUserIsTest),
+        webhookUrl: (this.data.editUserWebhookUrl || '').trim()
       };
 
       const res = await wx.cloud.callFunction({

@@ -262,6 +262,8 @@ Page({
   },
 
   async triggerUrgent() {
+    if (this._urgentSubmitting) return;
+    this._urgentSubmitting = true;
     wx.showLoading({ title: '提交催单...' });
     try {
       const res = await wx.cloud.callFunction({
@@ -276,15 +278,21 @@ Page({
       wx.hideLoading();
       const result = res.result || {};
       if (result.success) {
-        wx.showToast({ title: '已标记紧急催单', icon: 'success' });
+        if (result.notification && result.notification.success) {
+          wx.showToast({ title: '已催单，接单人员已通知', icon: 'none' });
+        } else {
+          wx.showModal({ title: '已标记紧急催单', content: '提醒未全部发送成功，可能未订阅或授权次数已用完。请直接联系接单人员。', showCancel: false });
+        }
         this.fetchOrderDetail(this.data.orderId);
       } else {
-        wx.showToast({ title: '催单失败', icon: 'none' });
+        wx.showToast({ title: result.msg || '催单失败', icon: 'none' });
       }
     } catch (e) {
       wx.hideLoading();
       console.error(e);
       wx.showToast({ title: '网络异常', icon: 'none' });
+    } finally {
+      this._urgentSubmitting = false;
     }
   },
 
