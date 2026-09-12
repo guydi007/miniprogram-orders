@@ -2,6 +2,7 @@ App({
   globalData: {
     currentUser: null,
     currentOpenid: '',
+    authVerified: false,
     workerList: [],
     availableCities: ['天津', '北京']
   },
@@ -16,7 +17,9 @@ App({
       });
 
       this.checkAppUpdate();
-      this.checkUserAuth();
+      this.checkUserAuth().finally(() => {
+        this.globalData.authVerified = true;
+      });
     }
   },
 
@@ -53,12 +56,18 @@ App({
 
         const cachedUser = wx.getStorageSync('currentUser');
 
+        // 测试账号不绑定 users.openid，由云端测试会话恢复身份。
+        if (res.result && res.result.user && res.result.user.isTest === true) {
+          const testUser = res.result.user;
+          this.globalData.currentUser = testUser;
+          wx.setStorageSync('currentUser', testUser);
+          if (this.authReadyCallback) this.authReadyCallback(testUser);
+          return resolve(testUser);
+        }
+
         if (!openid) {
-          if (cachedUser && cachedUser.phone) {
-            this.globalData.currentUser = cachedUser;
-            if (this.authReadyCallback) this.authReadyCallback(cachedUser);
-            return resolve(cachedUser);
-          }
+          wx.removeStorageSync('currentUser');
+          this.globalData.currentUser = null;
           if (this.authReadyCallback) this.authReadyCallback(null);
           return resolve(null);
         }
@@ -73,14 +82,6 @@ App({
             if (this.authReadyCallback) this.authReadyCallback(user);
             resolve(user);
           } else {
-            // 🌟 核心保护：若本地已有登录的免锁测试账号（isTest），不应被误删！
-            if (cachedUser && (cachedUser.isTest || checkIsAdmin(cachedUser))) {
-              this.globalData.currentUser = cachedUser;
-              if (this.authReadyCallback) this.authReadyCallback(cachedUser);
-              return resolve(cachedUser);
-            }
-
-            // 未绑定微信的普通账号才清理缓存，重置登录态
             wx.removeStorageSync('currentUser');
             this.globalData.currentUser = null;
             if (this.authReadyCallback) this.authReadyCallback(null);
@@ -88,27 +89,17 @@ App({
           }
         }).catch(err => {
           console.error('查询用户信息失败：', err);
-          if (cachedUser && cachedUser.phone) {
-            this.globalData.currentUser = cachedUser;
-            if (this.authReadyCallback) this.authReadyCallback(cachedUser);
-            return resolve(cachedUser);
-          }
+          wx.removeStorageSync('currentUser');
           this.globalData.currentUser = null;
           if (this.authReadyCallback) this.authReadyCallback(null);
           resolve(null);
         });
       }).catch(err => {
         console.warn('获取 OpenID 失败：', err);
-        const cachedUser = wx.getStorageSync('currentUser');
-        if (cachedUser && cachedUser.phone) {
-          this.globalData.currentUser = cachedUser;
-          if (this.authReadyCallback) this.authReadyCallback(cachedUser);
-          resolve(cachedUser);
-        } else {
-          this.globalData.currentUser = null;
-          if (this.authReadyCallback) this.authReadyCallback(null);
-          resolve(null);
-        }
+        wx.removeStorageSync('currentUser');
+        this.globalData.currentUser = null;
+        if (this.authReadyCallback) this.authReadyCallback(null);
+        resolve(null);
       });
     });
   },
@@ -120,7 +111,3 @@ App({
     }).catch(e => console.error('拉取师傅列表失败：', e));
   }
 });
-
-function checkIsAdmin(user) {
-  return Boolean(user && user.role === 'admin');
-}

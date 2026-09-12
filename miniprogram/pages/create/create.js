@@ -249,7 +249,6 @@ Page({
     this.setData({ isSubmitting: true });
     wx.showLoading({ title: '正在提交订单...' });
 
-    const db = wx.cloud.database();
     const orderData = {
       city: city,
       customerPhone: customerPhone,
@@ -260,7 +259,6 @@ Page({
       workerName: workerName,
       workerPhone: workerPhone,
       workerGroupId: workerGroupId,
-      creatorName: creatorName,
       totalAmount: totalAmount ? Number(totalAmount) : 0,
       paidAmount: 0,
       pendingBalance: 0,
@@ -270,11 +268,11 @@ Page({
         content: `【录单回馈】${finalFeedback}`,
         images: []
       }] : [],
-      createTime: new Date().toISOString()
     };
 
     try {
-      await db.collection('orders').add({ data: orderData });
+      const res = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'createOrder', data: orderData } });
+      if (!res.result || !res.result.success) throw new Error((res.result && res.result.msg) || '云端拒绝录单');
       wx.hideLoading();
       this.setData({ isSubmitting: false });
       wx.showToast({ title: '录单成功', icon: 'success' });

@@ -44,6 +44,7 @@ Page({
     isServiceOrLeader: false,
     isWorkerOrLeader: false,
     canOperateSettle: false,
+    canEditAppointment: false,
 
     candidateWorkers: [],
     candidateWorkerNames: [],
@@ -85,13 +86,16 @@ Page({
     const isServiceOrLeader = role === 'admin' || role === 'service' || role === 'leader';
     const isWorkerOrLeader = role === 'worker' || role === 'leader';
     const canOperateSettle = isLeader || (role === 'worker' && order && user && order.workerName === user.name);
+    const canEditAppointment = Boolean(order && !['已完工', '未成单'].includes(order.status) &&
+      (role === 'service' || isLeader || (role === 'worker' && user && order.workerName === user.name)));
 
     this.setData({
       currentUser: user,
       isLeader,
       isServiceOrLeader,
       isWorkerOrLeader,
-      canOperateSettle
+      canOperateSettle,
+      canEditAppointment
     });
   },
 
@@ -285,6 +289,7 @@ Page({
   },
 
   openEditTimeModal() {
+    if (!this.data.canEditAppointment) return wx.showToast({ title: '当前工单不可改期', icon: 'none' });
     this.setData({
       showEditTimeModal: true,
       editTimeInput: this.data.order.appointmentTime || ''
@@ -311,6 +316,7 @@ Page({
   },
 
   async submitEditTime() {
+    if (!this.data.canEditAppointment) return wx.showToast({ title: '当前工单不可改期', icon: 'none' });
     const newTime = parseDateSmart(this.data.editTimeInput);
     const oldTime = this.data.order.appointmentTime || '';
 

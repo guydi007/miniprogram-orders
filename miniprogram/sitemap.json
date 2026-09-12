@@ -1,7 +1,7 @@
 {
-  "desc": "关于本文件的更多信息，请参考文档 https://developers.weixin.qq.com/miniprogram/dev/framework/sitemap.html",
+  "desc": "内部派单管理系统，禁止所有页面被微信搜一搜收录",
   "rules": [{
-    "action": "allow",
+    "action": "disallow",
     "page": "*"
   }]
 }

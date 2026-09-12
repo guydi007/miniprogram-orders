@@ -1,6 +1,4 @@
 {
   "navigationBarTitleText": "派单系统",
-  "usingComponents": {
-    "cloud-tip-modal": "/components/cloudTipModal/index"
-  }
+  "usingComponents": {}
 }

@@ -10,9 +10,16 @@ exports.main = async (event, context) => {
 
   // 1. 默认仅获取 OpenID
   if (!action) {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const testRes = await db.collection('users').where({
+      isTest: true,
+      testSessionOpenid: currentOpenid,
+      testSessionTime: db.command.gt(cutoff)
+    }).limit(1).get();
     return {
       openid: currentOpenid,
-      appid: wxContext.APPID
+      appid: wxContext.APPID,
+      user: testRes.data && testRes.data[0] ? testRes.data[0] : null
     };
   }
 
@@ -30,15 +37,22 @@ exports.main = async (event, context) => {
 
       const user = userRes.data[0];
 
-      // 🌟 方案 1 核心：如果是测试账号 (isTest === true)，完全不绑定、不校验 OpenID，直接放行
+      // 测试账号保持免绑定；只记录当前测试会话，可随时切换，不占用正式 openid 字段。
       if (user.isTest === true) {
-        return {
-          success: true,
-          user: user
-        };
+        await db.collection('users').where({
+          isTest: true,
+          testSessionOpenid: currentOpenid
+        }).update({ data: { testSessionOpenid: '', testSessionTime: '' } });
+        await db.collection('users').doc(user._id).update({
+          data: {
+            testSessionOpenid: currentOpenid,
+            testSessionTime: new Date().toISOString()
+          }
+        });
+        user.testSessionOpenid = currentOpenid;
+        return { success: true, user };
       }
 
-      // --- 以下为正式员工锁定逻辑 ---
       const hasBoundOpenid = user.openid && user.openid.trim() !== '';
 
       // 账号已被其他微信号绑定 -> 拦截

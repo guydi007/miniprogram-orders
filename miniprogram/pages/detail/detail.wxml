@@ -46,7 +46,7 @@
         <text class="info-val highlight">{{ order.appointmentTime }}</text>
         <view 
           class="btn-edit-time" 
-          wx:if="{{ isServiceOrLeader && order.status !== '已完工' && order.status !== '未成单' }}" 
+          wx:if="{{ canEditAppointment }}"
           bindtap="openEditTimeModal"
         >
           <text class="edit-icon">✏️</text>

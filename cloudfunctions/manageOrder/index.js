@@ -1,125 +1,114 @@
 const cloud = require('wx-server-sdk');
-
-cloud.init({
-  env: cloud.DYNAMIC_CURRENT_ENV
-});
-
+cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
 const _ = db.command;
 
-exports.main = async (event, context) => {
+const fields = {
+  assign: ['workerName', 'workerPhone', 'workerGroupId'],
+  editTime: ['appointmentTime', 'appointmentLogs', 'feedbacks', 'isUrgent'],
+  cancel: ['uncompletedType', 'cancelReason', 'cancelTime', 'isUrgent'],
+  finish: ['status', 'settleType', 'cashAmount', 'wechatAmount', 'alipayAmount', 'finalAmount', 'depositAmount', 'totalAmount', 'remainingAmount', 'companionWorkers', 'finishPhotos', 'finishNote', 'paymentLogs', 'isUrgent', 'finishTime'],
+  feedback: ['feedbacks']
+};
+
+function pick(value, allowed) {
+  const out = {};
+  const input = value && typeof value === 'object' ? value : {};
+  allowed.forEach(key => { if (input[key] !== undefined) out[key] = input[key]; });
+  return out;
+}
+
+async function currentUser() {
+  const openid = cloud.getWXContext().OPENID;
+  if (!openid) return null;
+  const res = await db.collection('users').where({ openid }).limit(1).get();
+  if (res.data && res.data[0]) return res.data[0];
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const testRes = await db.collection('users').where({
+    isTest: true,
+    testSessionOpenid: openid,
+    testSessionTime: _.gt(cutoff)
+  }).limit(1).get();
+  return testRes.data && testRes.data[0] || null;
+}
+
+const hasRole = (user, roles) => Boolean(user && roles.includes(user.role));
+const canAccess = (user, order) => {
+  if (user.role === 'admin') return true;
+  if (user.role === 'worker') return order.workerName === user.name;
+  const cities = Array.isArray(user.cities) ? user.cities : [];
+  return !order.city || cities.includes(order.city);
+};
+
+exports.main = async (event = {}) => {
   const { action, orderId, orderIds, userId, data } = event;
-  const wxContext = cloud.getWXContext();
-
   try {
-    // 1. 批量指派师傅（主管专用）
+    const user = await currentUser();
+    if (!user) return { success: false, code: 'UNAUTHORIZED', msg: '登录已失效，请重新登录' };
+
+    if (action === 'createOrder') {
+      if (!hasRole(user, ['service', 'leader'])) return { success: false, msg: '无录单权限' };
+      const payload = pick(data, ['city', 'customerPhone', 'address', 'appointmentTime', 'source', 'workerName', 'workerPhone', 'workerGroupId', 'totalAmount', 'paidAmount', 'pendingBalance', 'feedbacks']);
+      const cities = Array.isArray(user.cities) ? user.cities : [];
+      if (payload.city && cities.length && !cities.includes(payload.city)) return { success: false, msg: '无权录入该城市工单' };
+      Object.assign(payload, { creatorName: user.name, createTime: new Date().toISOString(), status: payload.workerName ? '已派单' : '待派单' });
+      const result = await db.collection('orders').add({ data: payload });
+      return { success: true, orderId: result._id };
+    }
+
     if (action === 'batchAssignWorker') {
-      if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
-        return { success: false, msg: '缺少待指派的订单列表' };
-      }
-      await db.collection('orders').where({
-        _id: _.in(orderIds)
-      }).update({
-        data: {
-          workerName: data.workerName || '',
-          workerPhone: data.workerPhone || '',
-          workerGroupId: data.workerGroupId || '',
-          status: '已派单',
-          assignTime: new Date().toISOString()
-        }
+      if (!hasRole(user, ['leader'])) return { success: false, msg: '仅主管可批量派单' };
+      if (!Array.isArray(orderIds) || !orderIds.length || orderIds.length > 100) return { success: false, msg: '工单列表无效' };
+      const result = await db.collection('orders').where({ _id: _.in(orderIds), status: _.nin(['已完工', '未成单']) }).update({
+        data: { ...pick(data, fields.assign), status: '已派单', assignTime: new Date().toISOString() }
       });
+      return { success: true, updated: result.stats && result.stats.updated };
+    }
+
+    if (action === 'updateUser' || action === 'unbindUser') {
+      if (!hasRole(user, ['admin'])) return { success: false, msg: '仅管理员可管理员工' };
+      if (!userId) return { success: false, msg: '缺少员工ID' };
+      if (action === 'unbindUser') await db.collection('users').doc(userId).update({ data: { openid: '' } });
+      else {
+        const payload = pick(data, ['name', 'phone', 'role', 'cities', 'groupId', 'isTest']);
+        if (payload.role && !['admin', 'leader', 'service', 'worker'].includes(payload.role)) return { success: false, msg: '角色无效' };
+        if (payload.isTest !== undefined) payload.isTest = Boolean(payload.isTest);
+        await db.collection('users').doc(userId).update({ data: payload });
+      }
       return { success: true };
     }
 
-    // 2. 更新员工信息（开放所有字段：姓名、手机号、角色、城市、群号、测试号）
-    if (action === 'updateUser') {
-      if (!userId) {
-        return { success: false, msg: '缺少员工ID' };
-      }
-      const updatePayload = {};
-      if (data.name !== undefined) updatePayload.name = data.name;
-      if (data.phone !== undefined) updatePayload.phone = data.phone;
-      if (data.role !== undefined) updatePayload.role = data.role;
-      if (data.cities !== undefined) updatePayload.cities = data.cities;
-      if (data.groupId !== undefined) updatePayload.groupId = data.groupId;
-      if (data.isTest !== undefined) updatePayload.isTest = Boolean(data.isTest);
+    if (!orderId) return { success: false, msg: '缺少订单ID' };
+    const orderRes = await db.collection('orders').doc(orderId).get();
+    const order = orderRes.data;
+    if (!order || !canAccess(user, order)) return { success: false, msg: '无权访问该工单' };
 
-      await db.collection('users').doc(userId).update({
-        data: updatePayload
-      });
-      return { success: true };
-    }
-
-    // 3. 解绑员工微信号
-    if (action === 'unbindUser') {
-      if (!userId) {
-        return { success: false, msg: '缺少员工ID' };
-      }
-      await db.collection('users').doc(userId).update({
-        data: { openid: '' }
-      });
-      return { success: true };
-    }
-
-    // 4. 单独更新工单（派单/改派/标记未成单等）
     if (action === 'updateOrder') {
-      if (!orderId) {
-        return { success: false, msg: '缺少订单ID' };
-      }
-      await db.collection('orders').doc(orderId).update({
-        data: data || {}
-      });
-      return { success: true };
-    }
-
-    // 5. 催单
-    if (action === 'urgent') {
-      if (!orderId) return { success: false, msg: '缺少订单ID' };
-      await db.collection('orders').doc(orderId).update({
-        data: { isUrgent: true }
-      });
-      return { success: true };
-    }
-
-    // 6. 预约改期
-    if (action === 'editTime') {
-      if (!orderId) return { success: false, msg: '缺少订单ID' };
-      await db.collection('orders').doc(orderId).update({
-        data: data || {}
-      });
-      return { success: true };
-    }
-
-    // 7. 取消工单
-    if (action === 'cancelOrder') {
-      if (!orderId) return { success: false, msg: '缺少订单ID' };
-      await db.collection('orders').doc(orderId).update({
-        data: data || {}
-      });
-      return { success: true };
-    }
-
-    // 8. 完工结单 / 预付款结算
-    if (action === 'finishOrder') {
-      if (!orderId) return { success: false, msg: '缺少订单ID' };
-      await db.collection('orders').doc(orderId).update({
-        data: data || {}
-      });
-      return { success: true };
-    }
-
-    // 9. 进度回馈
-    if (action === 'feedback') {
-      if (!orderId) return { success: false, msg: '缺少订单ID' };
-      await db.collection('orders').doc(orderId).update({
-        data: data || {}
-      });
-      return { success: true };
-    }
-
-    return { success: false, msg: '未知操作类型' };
+      if (!hasRole(user, ['leader'])) return { success: false, msg: '仅主管可派单' };
+      if (['已完工', '未成单'].includes(order.status)) return { success: false, msg: '归档工单不可改派' };
+      await db.collection('orders').doc(orderId).update({ data: { ...pick(data, fields.assign), status: '已派单', assignTime: new Date().toISOString() } });
+    } else if (action === 'urgent') {
+      if (!hasRole(user, ['service', 'leader'])) return { success: false, msg: '无催单权限' };
+      await db.collection('orders').doc(orderId).update({ data: { isUrgent: true, urgentTime: new Date().toISOString() } });
+    } else if (action === 'editTime') {
+      if (!hasRole(user, ['service', 'leader', 'worker'])) return { success: false, msg: '无改期权限' };
+      if (['已完工', '未成单'].includes(order.status)) return { success: false, msg: '归档工单不可改期' };
+      if (!data || typeof data.appointmentTime !== 'string' || !data.appointmentTime.trim()) return { success: false, msg: '请输入预约时间' };
+      await db.collection('orders').doc(orderId).update({ data: pick(data, fields.editTime) });
+    } else if (action === 'cancelOrder') {
+      if (!hasRole(user, ['service', 'leader'])) return { success: false, msg: '无取消权限' };
+      await db.collection('orders').doc(orderId).update({ data: { ...pick(data, fields.cancel), status: '未成单' } });
+    } else if (action === 'finishOrder') {
+      if (!(user.role === 'worker' && order.workerName === user.name) && !hasRole(user, ['leader'])) return { success: false, msg: '无结算权限' };
+      if (order.status === '未成单') return { success: false, msg: '未成单不可结算' };
+      await db.collection('orders').doc(orderId).update({ data: pick(data, fields.finish) });
+    } else if (action === 'feedback') {
+      if (!hasRole(user, ['service', 'leader', 'worker'])) return { success: false, msg: '无回馈权限' };
+      await db.collection('orders').doc(orderId).update({ data: pick(data, fields.feedback) });
+    } else return { success: false, msg: '未知操作类型' };
+    return { success: true };
   } catch (err) {
     console.error('云函数处理异常：', err);
-    return { success: false, error: err };
+    return { success: false, msg: '云端处理失败', error: err.message || String(err) };
   }
 };

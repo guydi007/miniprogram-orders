@@ -76,12 +76,6 @@ Page({
 
   onLoad() {
     this.fetchCities().finally(() => {
-      const cachedUser = wx.getStorageSync('currentUser');
-      if (cachedUser && cachedUser.phone) {
-        this.handleUserLoaded(cachedUser);
-        return;
-      }
-
       if (app.globalData && app.globalData.currentUser) {
         this.handleUserLoaded(app.globalData.currentUser);
       } else {
@@ -102,6 +96,7 @@ Page({
   onReady() {},
 
   onShow() {
+    if (!app.globalData || !app.globalData.authVerified) return;
     const cachedUser = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
     if (cachedUser && cachedUser.phone) {
       if (!this.data.currentUser || this.data.currentUser.phone !== cachedUser.phone) {
