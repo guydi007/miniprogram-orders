@@ -124,12 +124,10 @@ Page({
   },
 
   fetchCandidateWorkers() {
-    const db = wx.cloud.database();
-    const _ = db.command;
-    db.collection('users').where({
-      role: _.in(['worker', 'leader'])
-    }).get().then(res => {
-      const workers = res.data || [];
+    wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getWorkers' } }).then(res => {
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'WORKERS_UNAVAILABLE');
+      const workers = result.workers || [];
       this.setData({
         candidateWorkers: workers,
         candidateWorkerNames: ['请选择师傅', ...workers.map(w => w.name + (w.role === 'leader' ? ' [主管]' : '') + (w.groupId ? ` (${w.groupId})` : ''))]
@@ -272,7 +270,7 @@ Page({
         });
         this.fetchOrders();
       } else {
-        wx.showToast({ title: '批量派单失败，请重试', icon: 'none' });
+        wx.showToast({ title: result.msg || '批量派单失败，请重试', icon: 'none' });
       }
     } catch (err) {
       wx.hideLoading();
@@ -407,12 +405,11 @@ Page({
     }
 
     wx.showLoading({ title: '核验中...' });
-    const db = wx.cloud.database();
-
     try {
-      const res = await db.collection('users').doc(user._id).get();
+      const res = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getSessionUser' } });
       wx.hideLoading();
-      const dbUser = res.data || user;
+      const result = res.result || {};
+      const dbUser = result.success ? result.user : user;
 
       if (dbUser.isTest === true || checkIsAdmin(dbUser)) {
         wx.showModal({
@@ -511,33 +508,13 @@ Page({
     const user = this.data.currentUser;
     if (!user || !user.phone) return;
 
-    const db = wx.cloud.database();
     wx.showNavigationBarLoading();
-    const MAX_LIMIT = 20;
 
     try {
-      const countResult = await db.collection('orders').count();
-      const total = countResult.total;
-      const batchTimes = Math.ceil(total / MAX_LIMIT);
-      const tasks = [];
-
-      for (let i = 0; i < batchTimes; i++) {
-        const promise = db.collection('orders')
-          .orderBy('createTime', 'desc')
-          .skip(i * MAX_LIMIT)
-          .limit(MAX_LIMIT)
-          .get();
-        tasks.push(promise);
-      }
-
-      let allOrders = [];
-      if (tasks.length > 0) {
-        const results = await Promise.all(tasks);
-        allOrders = results.reduce((acc, cur) => {
-          const list = (cur && Array.isArray(cur.data)) ? cur.data : [];
-          return acc.concat(list);
-        }, []);
-      }
+      const response = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getOrders' } });
+      const result = response.result || {};
+      if (!result.success) throw new Error(result.msg || 'ORDERS_UNAVAILABLE');
+      const allOrders = Array.isArray(result.orders) ? result.orders : [];
 
       allOrders.sort((a, b) => {
         const timeA = a.appointmentTime || '';
@@ -550,20 +527,7 @@ Page({
         return createB.localeCompare(createA);
       });
 
-      const userCities = Array.isArray(user.cities) ? user.cities : [];
-      let roleFiltered = allOrders;
-
-      if (user.role === 'worker') {
-        roleFiltered = allOrders.filter(o => 
-          o.workerName === user.name && (!o.city || userCities.includes(o.city))
-        );
-      } else if (user.role === 'service' || user.role === 'leader') {
-        roleFiltered = allOrders.filter(o => 
-          !o.city || userCities.includes(o.city)
-        );
-      }
-
-      this.setData({ orders: roleFiltered }, () => {
+      this.setData({ orders: allOrders }, () => {
         this.applyFilters();
         wx.hideNavigationBarLoading();
       });
@@ -762,9 +726,10 @@ Page({
   },
 
   fetchAllUsers() {
-    const db = wx.cloud.database();
-    db.collection('users').get().then(res => {
-      const list = (res.data || []).map(item => {
+    wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getUsers' } }).then(res => {
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'USERS_UNAVAILABLE');
+      const list = (result.users || []).map(item => {
         let citiesArr = [];
         if (Array.isArray(item.cities)) {
           citiesArr = item.cities;
@@ -805,16 +770,10 @@ Page({
     if (exists) return wx.showToast({ title: '该渠道已存在', icon: 'none' });
 
     wx.showLoading({ title: '正在添加...' });
-    const db = wx.cloud.database();
     try {
-      await db.collection('order_sources').add({
-        data: {
-          name: name,
-          sort: Date.now(),
-          enabled: true,
-          createTime: new Date().toISOString()
-        }
-      });
+      const res = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'createSource', data: { name } } });
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'CREATE_SOURCE_FAILED');
       wx.hideLoading();
       wx.showToast({ title: '添加成功', icon: 'success' });
       this.setData({ newSourceName: '' });
@@ -838,9 +797,10 @@ Page({
       success: async (res) => {
         if (res.confirm) {
           wx.showLoading({ title: '正在删除...' });
-          const db = wx.cloud.database();
           try {
-            await db.collection('order_sources').doc(id).remove();
+            const response = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'deleteSource', data: { sourceId: id } } });
+            const result = response.result || {};
+            if (!result.success) throw new Error(result.msg || 'DELETE_SOURCE_FAILED');
             wx.hideLoading();
             wx.showToast({ title: '已删除', icon: 'success' });
             this.fetchSources();
@@ -902,35 +862,19 @@ Page({
     if (!phone || phone.length !== 11) return wx.showToast({ title: '请输入11位手机号', icon: 'none' });
     if (!cities || cities.length === 0) return wx.showToast({ title: '请至少分配一个城市', icon: 'none' });
 
-    wx.showLoading({ title: '正在校验手机号...' });
-    const db = wx.cloud.database();
-
+    wx.showLoading({ title: '正在录入...' });
     try {
-      const checkRes = await db.collection('users').where({ phone: phone }).get();
-      if (checkRes.data && checkRes.data.length > 0) {
-        wx.hideLoading();
-        const existing = checkRes.data[0];
-        const existingRole = existing.role === 'admin' ? '管理' : (existing.role === 'leader' ? '主管' : (existing.role === 'service' ? '客服' : '师傅'));
-        return wx.showModal({
-          title: '手机号冲突',
-          content: `该手机号已被【${existing.name || '员工'}】（${existingRole}）占用！不可重复录入。`,
-          showCancel: false
-        });
-      }
-
       const userData = {
         name: name,
         phone: phone,
         role: role,
         cities: cities,
         groupId: role === 'worker' ? groupId : '',
-        isTest: isTest,
-        openid: '',
-        createTime: new Date().toISOString()
+        isTest: isTest
       };
-
-      wx.showLoading({ title: '正在录入...' });
-      await db.collection('users').add({ data: userData });
+      const response = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'createUser', data: userData } });
+      const result = response.result || {};
+      if (!result.success) throw new Error(result.msg || 'CREATE_USER_FAILED');
       wx.hideLoading();
       wx.showToast({ title: '录入成功', icon: 'success' });
 
@@ -1074,24 +1018,9 @@ Page({
       return wx.showToast({ title: '请至少保留一个城市', icon: 'none' });
     }
 
-    const db = wx.cloud.database();
     wx.showLoading({ title: '正在保存...' });
 
     try {
-      if (phone !== editingUser.phone) {
-        const checkRes = await db.collection('users').where({ phone: phone }).get();
-        const conflict = (checkRes.data || []).find(u => u._id !== editingUser._id);
-        if (conflict) {
-          wx.hideLoading();
-          const existingRole = conflict.role === 'admin' ? '管理' : (conflict.role === 'leader' ? '主管' : (conflict.role === 'service' ? '客服' : '师傅'));
-          return wx.showModal({
-            title: '手机号冲突',
-            content: `该手机号已被【${conflict.name || '员工'}】（${existingRole}）占用！`,
-            showCancel: false
-          });
-        }
-      }
-
       const finalRole = editingUser.role === 'admin' ? 'admin' : editUserRole;
       const isWorker = finalRole === 'worker';
 
@@ -1121,7 +1050,7 @@ Page({
         this.setData({ showEditUserModal: false });
         this.fetchAllUsers();
       } else {
-        wx.showToast({ title: '保存失败，请重试', icon: 'none' });
+        wx.showToast({ title: result.msg || '保存失败，请重试', icon: 'none' });
       }
     } catch (err) {
       console.error('更新员工信息失败：', err);
@@ -1164,7 +1093,7 @@ Page({
               this.setData({ editingUser: updated });
               this.fetchAllUsers();
             } else {
-              wx.showToast({ title: '解绑失败', icon: 'none' });
+              wx.showToast({ title: result.msg || '解绑失败', icon: 'none' });
             }
           }).catch(err => {
             console.error('解绑异常：', err);

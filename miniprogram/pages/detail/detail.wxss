@@ -114,6 +114,21 @@ page {
 }
 
 .phone { color: #0284c7; font-weight: 500; }
+.address-value { min-width: 0; }
+.address-link {
+  display: block;
+  color: #0284c7;
+  font-size: 26rpx;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+.address-map-hint {
+  display: block;
+  color: #64748b;
+  font-size: 22rpx;
+  line-height: 1.6;
+  padding-top: 6rpx;
+}
 .highlight { color: #07c160; font-weight: 500; }
 
 .time-row-val {

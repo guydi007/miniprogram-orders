@@ -66,7 +66,7 @@ Page({
     this.setData({ currentUser: user }, () => {
       this.loadCities();
       this.loadSources();
-      this.loadWorkers();
+      if (user && user.role === 'leader') this.loadWorkers();
     });
   },
 
@@ -128,12 +128,10 @@ Page({
   },
 
   loadWorkers() {
-    const db = wx.cloud.database();
-    const _ = db.command;
-    db.collection('users').where({
-      role: _.in(['worker', 'leader'])
-    }).get().then(res => {
-      const workers = res.data || [];
+    wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getWorkers' } }).then(res => {
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'WORKERS_UNAVAILABLE');
+      const workers = result.workers || [];
       const workerNames = ['暂不指派（保持待派单）', ...workers.map(w => w.name + (w.role === 'leader' ? ' [主管]' : '') + (w.groupId ? ` (${w.groupId})` : ''))];
       this.setData({
         workers: workers,

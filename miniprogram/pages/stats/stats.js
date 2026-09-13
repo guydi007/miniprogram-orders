@@ -117,19 +117,13 @@ Page({
 
   fetchWorkers() {
     const { selectedCityFilter } = this.data;
-    const db = wx.cloud.database();
-    const _ = db.command;
-
-    db.collection('users').where({
-      role: _.in(['worker', 'leader'])
-    }).get().then(res => {
-      let workers = res.data || [];
-      if (selectedCityFilter !== 'all') {
-        workers = workers.filter(w => {
-          const wCities = Array.isArray(w.cities) ? w.cities : (w.cities ? [w.cities] : []);
-          return wCities.some(c => c && (c.includes(selectedCityFilter) || selectedCityFilter.includes(c)));
-        });
-      }
+    wx.cloud.callFunction({
+      name: 'manageOrder',
+      data: { action: 'getWorkers', data: { city: selectedCityFilter === 'all' ? '' : selectedCityFilter } }
+    }).then(res => {
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'WORKERS_UNAVAILABLE');
+      const workers = result.workers || [];
       const workerNames = ['全部师傅', ...workers.map(w => w.name + (w.role === 'leader' ? ' [主管]' : ''))];
       this.setData({ 
         workers, 
@@ -190,24 +184,11 @@ Page({
     if (!user) return;
 
     wx.showLoading({ title: '加载数据中...' });
-    const db = wx.cloud.database();
-    const MAX_LIMIT = 20;
-
     try {
-      const countResult = await db.collection('orders').count();
-      const total = countResult.total;
-      const batchTimes = Math.ceil(total / MAX_LIMIT);
-      const tasks = [];
-
-      for (let i = 0; i < batchTimes; i++) {
-        tasks.push(db.collection('orders').skip(i * MAX_LIMIT).limit(MAX_LIMIT).get());
-      }
-
-      let allOrders = [];
-      if (tasks.length > 0) {
-        const results = await Promise.all(tasks);
-        allOrders = results.reduce((acc, cur) => acc.concat(cur.data || []), []);
-      }
+      const response = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getOrders' } });
+      const result = response.result || {};
+      if (!result.success) throw new Error(result.msg || 'ORDERS_UNAVAILABLE');
+      const allOrders = Array.isArray(result.orders) ? result.orders : [];
 
       const uniqueCreators = [...new Set(allOrders.map(o => o.creatorName).filter(Boolean))];
       const creatorNames = ['全部录单人', ...uniqueCreators];

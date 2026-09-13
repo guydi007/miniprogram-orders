@@ -105,22 +105,38 @@ Page({
 
     if (options && options.id) {
       this.setData({ orderId: options.id });
-      this.fetchOrderDetail(options.id);
     }
   },
 
   onShow() {
     const user = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
     this.updatePermissions(this.data.order, user);
+    if (this.data.orderId) this.fetchOrderDetail(this.data.orderId);
+  },
+
+  onUnload() {
+    this._detailUnloaded = true;
+    this._refreshDetailAfterLoad = false;
+    if (this._detailPromise || this._openingOrderLocation) wx.hideLoading();
   },
 
   fetchOrderDetail(id) {
+    if (this._detailUnloaded || !id) return Promise.resolve();
+    if (this._detailPromise) {
+      this._refreshDetailAfterLoad = true;
+      return this._detailPromise;
+    }
     wx.showLoading({ title: '加载中...' });
-    const db = wx.cloud.database();
-
-    db.collection('orders').doc(id).get().then(res => {
+    this._detailPromise = wx.cloud.callFunction({
+      name: 'manageOrder',
+      data: { action: 'getOrderDetail', orderId: id }
+    }).then(res => {
+      if (this._detailUnloaded) return;
       wx.hideLoading();
-      const order = res.data;
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'ORDER_ACCESS_DENIED');
+      const order = result.order;
+      if (!order) throw new Error('ORDER_NOT_FOUND');
 
       if (order.finishTime) {
         order.finishTimeFormatted = formatDateTime(order.finishTime);
@@ -158,37 +174,28 @@ Page({
         this.fetchCandidateWorkers(order.city);
       }
     }).catch(err => {
+      if (this._detailUnloaded) return;
       wx.hideLoading();
       console.error(err);
       wx.showToast({ title: '加载工单失败', icon: 'none' });
+    }).finally(() => {
+      this._detailPromise = null;
+      if (this._refreshDetailAfterLoad && !this._detailUnloaded) {
+        this._refreshDetailAfterLoad = false;
+        this.fetchOrderDetail(this.data.orderId);
+      }
     });
+    return this._detailPromise;
   },
 
   fetchCandidateWorkers(city) {
-    const db = wx.cloud.database();
-    const _ = db.command;
-
-    db.collection('users').where({
-      role: _.in(['worker', 'leader'])
-    }).get().then(res => {
-      const all = res.data || [];
-      const cleanCity = (city || '').trim();
-
-      let matched = all.filter(w => {
-        if (!cleanCity) return true;
-        let citiesArr = [];
-        if (Array.isArray(w.cities)) citiesArr = w.cities;
-        else if (w.cities && typeof w.cities === 'object') citiesArr = Object.values(w.cities);
-        else if (typeof w.cities === 'string') citiesArr = [w.cities];
-
-        if (citiesArr.length === 0) return true;
-        return citiesArr.some(c => c && (c.includes(cleanCity) || cleanCity.includes(c)));
-      });
-
-      if (matched.length === 0 && all.length > 0) {
-        matched = all;
-      }
-
+    wx.cloud.callFunction({
+      name: 'manageOrder',
+      data: { action: 'getWorkers', data: { city } }
+    }).then(res => {
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'WORKERS_UNAVAILABLE');
+      const matched = result.workers || [];
       this.setData({
         candidateWorkers: matched,
         candidateWorkerNames: matched.map(w => w.name + (w.role === 'leader' ? ' [主管]' : '') + (w.groupId ? ` (${w.groupId})` : ''))
@@ -258,6 +265,75 @@ Page({
   callCustomer() {
     if (this.data.order && this.data.order.customerPhone) {
       wx.makePhoneCall({ phoneNumber: this.data.order.customerPhone });
+    }
+  },
+
+  showMapFallback(message) {
+    if (this._detailUnloaded) return Promise.resolve();
+    return new Promise(resolve => wx.showModal({
+      title: '暂时无法打开地图',
+      content: message || '请核对详细地址，或复制地址到地图 App 中搜索。',
+      confirmText: '复制地址', cancelText: '取消',
+      success: res => {
+        if (res.confirm && this.data.order) {
+          const order = this.data.order;
+          const address = typeof order.address === 'string' ? order.address.trim() : '';
+          const city = typeof order.city === 'string' ? order.city.trim() : '';
+          if (address) wx.setClipboardData({ data: address.includes(city) ? address : city + address });
+        }
+        resolve();
+      },
+      fail: () => resolve()
+    }));
+  },
+
+  async openOrderLocation() {
+    if (this._openingOrderLocation || this._detailUnloaded) return;
+    const order = this.data.order;
+    if (!order || !this.data.orderId || typeof order.address !== 'string' || !order.address.trim()) {
+      return wx.showToast({ title: '暂无有效服务地址', icon: 'none' });
+    }
+    if (!wx.openLocation) return this.showMapFallback('当前微信版本不支持打开地图，请升级微信或复制地址自行搜索。');
+    this._openingOrderLocation = true;
+    wx.showLoading({ title: '查询服务地点...', mask: true });
+    let loading = true;
+    try {
+      const res = await wx.cloud.callFunction({ name: 'manageOrder', data: {
+        action: 'getOrderLocation', orderId: this.data.orderId
+      } });
+      loading = false;
+      if (this._detailUnloaded) return;
+      wx.hideLoading();
+      const result = res.result || {};
+      if (!result.success) {
+        if (result.code === 'UNAUTHORIZED') return wx.showToast({ title: '登录已失效，请重新登录', icon: 'none' });
+        return await this.showMapFallback(result.msg);
+      }
+      const point = result.location || {};
+      if (point.coordinateSystem !== 'gcj02' || typeof point.latitude !== 'number' || typeof point.longitude !== 'number' ||
+          !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude) ||
+          Math.abs(point.latitude) > 90 || Math.abs(point.longitude) > 180 || (point.latitude === 0 && point.longitude === 0)) {
+        return await this.showMapFallback('地图坐标无效，请复制地址自行搜索。');
+      }
+      const confirmed = await new Promise(resolve => wx.showModal({
+        title: '核对地图地点',
+        content: `工单地址：${point.city || ''} ${point.address || ''}\n地图匹配：${point.resolvedAddress || point.name || ''}\n文字地址可能有偏差，打开后请核对地图标记，确认无误再导航。`,
+        confirmText: '查看地图', cancelText: '取消',
+        success: value => resolve(value.confirm), fail: () => resolve(false)
+      }));
+      if (!confirmed || this._detailUnloaded) return;
+      await new Promise(resolve => wx.openLocation({
+        latitude: point.latitude, longitude: point.longitude, scale: 18,
+        name: point.name, address: `${point.city || ''} ${point.address || ''}`.trim(),
+        success: () => resolve(),
+        fail: () => { this.showMapFallback('微信未能打开地图，请重试或复制地址自行搜索。').then(resolve); }
+      }));
+    } catch (error) {
+      if (loading) { if (!this._detailUnloaded) wx.hideLoading(); loading = false; }
+      await this.showMapFallback('查询地图失败，请确认网络，或复制地址自行搜索。');
+    } finally {
+      if (loading && !this._detailUnloaded) wx.hideLoading();
+      this._openingOrderLocation = false;
     }
   },
 
@@ -389,7 +465,7 @@ Page({
         wx.showToast({ title: '改期成功！', icon: 'success' });
         this.fetchOrderDetail(this.data.orderId);
       } else {
-        wx.showToast({ title: '改期失败，请重试', icon: 'none' });
+        wx.showToast({ title: result.msg || '改期失败，请重试', icon: 'none' });
       }
     } catch (err) {
       wx.hideLoading();
@@ -463,7 +539,7 @@ Page({
         wx.showToast({ title: '工单已退单归档', icon: 'success' });
         this.fetchOrderDetail(this.data.orderId);
       } else {
-        wx.showToast({ title: '取消失败，请重试', icon: 'none' });
+        wx.showToast({ title: result.msg || '取消失败，请重试', icon: 'none' });
       }
     } catch (err) {
       wx.hideLoading();
@@ -487,7 +563,7 @@ Page({
     this.setData({ failReason: e.detail.value.trim() });
   },
 
-  // 师傅/主管现场未成单：打上 worker_fail 标识
+  // 师傅/主管现场未成单：由云端校验身份并生成归档留痕。
   async submitFailOrder() {
     const reason = this.data.failReason;
     if (!reason) {
@@ -495,39 +571,13 @@ Page({
     }
 
     wx.showLoading({ title: '正在归档未成单...' });
-    const now = new Date();
-    const currentUser = this.data.currentUser;
-    const opRole = (currentUser && currentUser.role === 'leader') ? '主管' : '师傅';
-
-    const failFeedback = {
-      id: 'fb_' + Date.now(),
-      time: now.toISOString(),
-      timeFormatted: formatDateTime(now),
-      operatorName: (currentUser && currentUser.name) || opRole,
-      operatorRole: (currentUser && currentUser.role) || 'worker',
-      content: `[现场标记未成单] 理由：${reason}`,
-      photos: []
-    };
-
-    const existingFeedbacks = Array.isArray(this.data.order.feedbacks) ? this.data.order.feedbacks : [];
-    const updatedFeedbacks = [failFeedback, ...existingFeedbacks];
-
-    const updateData = {
-      status: '未成单',
-      uncompletedType: 'worker_fail',
-      failReason: reason,
-      failOperator: (currentUser && currentUser.name) || opRole,
-      failTime: now.toISOString(),
-      feedbacks: updatedFeedbacks
-    };
-
     try {
       const res = await wx.cloud.callFunction({
         name: 'manageOrder',
         data: {
-          action: 'updateOrder',
+          action: 'failOrder',
           orderId: this.data.orderId,
-          data: updateData
+          data: { failReason: reason }
         }
       });
 
@@ -538,7 +588,7 @@ Page({
         wx.showToast({ title: '已归入未成单', icon: 'success' });
         this.fetchOrderDetail(this.data.orderId);
       } else {
-        wx.showToast({ title: '操作失败，请重试', icon: 'none' });
+        wx.showToast({ title: result.msg || '操作失败，请重试', icon: 'none' });
       }
     } catch (err) {
       wx.hideLoading();
@@ -802,7 +852,7 @@ Page({
         });
         this.fetchOrderDetail(orderId);
       } else {
-        wx.showToast({ title: '保存失败，请重试', icon: 'none' });
+        wx.showToast({ title: result.msg || '保存失败，请重试', icon: 'none' });
       }
     } catch (err) {
       console.error(err);
@@ -900,7 +950,7 @@ Page({
         wx.showToast({ title: '回馈已提交！', icon: 'success' });
         this.fetchOrderDetail(orderId);
       } else {
-        wx.showToast({ title: '提交回馈失败', icon: 'none' });
+        wx.showToast({ title: result.msg || '提交回馈失败', icon: 'none' });
       }
     } catch (err) {
       console.error(err);

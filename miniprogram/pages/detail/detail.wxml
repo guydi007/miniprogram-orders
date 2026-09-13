@@ -36,7 +36,11 @@
     </view>
     <view class="info-row">
       <text class="info-label">服务地址：</text>
-      <text class="info-val">{{ order.address ? '📍 ' + order.address : '-' }}</text>
+      <view class="info-val address-value">
+        <text class="address-link" wx:if="{{ order.address }}" bindtap="openOrderLocation">📍 {{ order.address }}</text>
+        <text wx:else>-</text>
+        <text class="address-map-hint" wx:if="{{ order.address }}" bindtap="openOrderLocation">点击查看地图 ›</text>
+      </view>
     </view>
 
     <!-- 预约时间 -->
