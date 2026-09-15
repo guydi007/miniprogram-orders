@@ -70,6 +70,8 @@ Page({
     fullTotal: 0,
     depositTotal: 0,
     remainTotal: 0,
+    existingPrepayPaid: 0,
+    existingPrepayChannels: { cash: 0, wechat: 0, alipay: 0 },
 
     modalCompanions: '',
     modalNote: '',
@@ -603,7 +605,8 @@ Page({
     const alipay = Number(this.data.inputAlipay) || 0;
     const total = Number(this.data.inputTotalAmount) || 0;
 
-    const sum = Number((cash + wechat + alipay).toFixed(2));
+    const existing = this.data.settleMode === 'prepay' ? Number(this.data.existingPrepayPaid || 0) : 0;
+    const sum = Number((cash + wechat + alipay + existing).toFixed(2));
     const remain = Math.max(0, Number((total - sum).toFixed(2)));
 
     this.setData({
@@ -647,6 +650,8 @@ Page({
     this.setData({
       showFinishModal: true,
       settleMode: 'full',
+      existingPrepayPaid: 0,
+      existingPrepayChannels: { cash: 0, wechat: 0, alipay: 0 },
       inputCash: cash,
       inputWechat: wechat,
       inputAlipay: alipay,
@@ -666,15 +671,19 @@ Page({
 
   openPrepayModal() {
     const o = this.data.order || {};
-    const cash = o.cashAmount ? String(o.cashAmount) : '';
-    const wechat = o.wechatAmount ? String(o.wechatAmount) : (o.depositAmount ? String(o.depositAmount) : '');
-    const alipay = o.alipayAmount ? String(o.alipayAmount) : '';
+    const hasExisting = o.settleType === '预付款';
+    const cash = hasExisting ? '' : (o.cashAmount ? String(o.cashAmount) : '');
+    const wechat = hasExisting ? '' : (o.wechatAmount ? String(o.wechatAmount) : '');
+    const alipay = hasExisting ? '' : (o.alipayAmount ? String(o.alipayAmount) : '');
+    const existingPaid = hasExisting ? Number(o.depositAmount || o.finalAmount || 0) : 0;
     const total = o.totalAmount ? String(o.totalAmount) : '';
     const companions = o.companionWorkers || '';
 
     this.setData({
       showFinishModal: true,
       settleMode: 'prepay',
+      existingPrepayPaid: existingPaid,
+      existingPrepayChannels: hasExisting ? { cash: Number(o.cashAmount || 0), wechat: Number(o.wechatAmount || 0), alipay: Number(o.alipayAmount || 0) } : { cash: 0, wechat: 0, alipay: 0 },
       inputCash: cash,
       inputWechat: wechat,
       inputAlipay: alipay,
@@ -731,9 +740,10 @@ Page({
   async submitFinishOrder() {
     const { settleMode, inputCash, inputWechat, inputAlipay, inputTotalAmount, fullTotal, depositTotal, remainTotal, modalCompanions, modalNote, localPhotos, orderId, order, currentUser, initialSnapshot } = this.data;
 
-    const cash = Number(inputCash) || 0;
-    const wechat = Number(inputWechat) || 0;
-    const alipay = Number(inputAlipay) || 0;
+    const existingChannels = settleMode === 'prepay' ? (this.data.existingPrepayChannels || {}) : {};
+    const cash = (Number(inputCash) || 0) + (Number(existingChannels.cash) || 0);
+    const wechat = (Number(inputWechat) || 0) + (Number(existingChannels.wechat) || 0);
+    const alipay = (Number(inputAlipay) || 0) + (Number(existingChannels.alipay) || 0);
     const paidSum = settleMode === 'full' ? fullTotal : depositTotal;
 
     if (paidSum <= 0) {

@@ -6,6 +6,9 @@ const { parseWebhook } = require('./groupNotifications');
 const { notifyAll, getNotificationConfig } = require('./notifications');
 const { resolveOrderLocation } = require('./orderLocation');
 
+const DEFAULT_CLIENT_POLICY = { latestBuild: 20400, minWriteBuild: 0, minReadBuild: 0, apiSchema: 2, forceAfter: '', message: '请升级到最新版本' };
+const WRITE_ACTIONS = new Set(['createOrder', 'assignWorker', 'batchAssignWorker', 'updateOrder', 'urgent', 'editTime', 'finishOrder', 'cancelOrder', 'failOrder', 'feedback', 'createUser', 'updateUser', 'unbindUser', 'createSource', 'deleteSource']);
+
 const fields = {
   assign: ['workerName', 'workerPhone', 'workerGroupId'],
   editTime: ['appointmentTime', 'appointmentLogs', 'feedbacks', 'isUrgent'],
@@ -20,6 +23,28 @@ function pick(value, allowed) {
   const input = value && typeof value === 'object' ? value : {};
   allowed.forEach(key => { if (input[key] !== undefined) out[key] = input[key]; });
   return out;
+}
+
+function validateCreateOrder(data) {
+  const input = data && typeof data === 'object' ? data : {};
+  for (const [key, label] of [['customerPhone', '客户电话'], ['address', '服务地址'], ['appointmentTime', '预约时间']]) {
+    if (!String(input[key] || '').trim()) return `请填写${label}`;
+  }
+  if (!/^1\d{10}$/.test(String(input.customerPhone).trim())) return '客户电话格式不正确';
+  if (input.totalAmount !== undefined && (!Number.isFinite(Number(input.totalAmount)) || Number(input.totalAmount) < 0)) return '工程金额不正确';
+  return '';
+}
+
+function validateSettlement(data) {
+  const input = data && typeof data === 'object' ? data : {};
+  const keys = ['cashAmount', 'wechatAmount', 'alipayAmount'];
+  for (const key of keys) if (!Number.isFinite(Number(input[key] || 0)) || Number(input[key] || 0) < 0) return '收款金额不正确';
+  const paid = keys.reduce((sum, key) => sum + Number(input[key] || 0), 0);
+  if (paid <= 0) return '请输入至少一项收款金额';
+  const total = Number(input.totalAmount || paid);
+  const remain = Number(input.remainingAmount || 0);
+  if (!Number.isFinite(total) || total < paid || remain < 0 || Math.abs(total - paid - remain) > 0.01) return '结算金额不正确';
+  return '';
 }
 
 async function currentUser() {
@@ -104,6 +129,26 @@ async function listWorkersFor(user, city) {
 exports.main = async (event = {}) => {
   const { action, orderId, orderIds, userId, data } = event;
   try {
+    if (action === 'getClientPolicy') {
+      let policy = DEFAULT_CLIENT_POLICY;
+      try {
+        const result = await db.collection('system_config').doc('clientPolicy').get();
+        if (result.data && typeof result.data === 'object') policy = { ...DEFAULT_CLIENT_POLICY, ...result.data };
+      } catch (error) {
+        // 首次部署尚未创建配置文档时使用安全默认值，不阻断登录。
+        console.warn('读取客户端版本策略失败，使用默认策略：', error.message);
+      }
+      return { success: true, ...policy };
+    }
+    const buildNo = Number(event.buildNo || 0);
+    const apiSchema = Number(event.apiSchema || 0);
+    let policy = DEFAULT_CLIENT_POLICY;
+    try {
+      const result = await db.collection('system_config').doc('clientPolicy').get();
+      if (result.data && typeof result.data === 'object') policy = { ...DEFAULT_CLIENT_POLICY, ...result.data };
+    } catch (error) { console.warn('读取客户端版本策略失败，使用默认策略：', error.message); }
+    if (apiSchema && apiSchema < Number(policy.apiSchema || 0)) return { success: false, code: 'CLIENT_UPDATE_REQUIRED', policy, msg: policy.message };
+    if (WRITE_ACTIONS.has(action) && buildNo && buildNo < Number(policy.minWriteBuild || 0)) return { success: false, code: 'CLIENT_UPDATE_REQUIRED', policy, msg: policy.message };
     const user = await currentUser();
     if (!user) return { success: false, code: 'UNAUTHORIZED', msg: '登录已失效，请重新登录' };
 
@@ -170,11 +215,24 @@ exports.main = async (event = {}) => {
 
     if (action === 'createOrder') {
       if (!hasRole(user, ['service', 'leader'])) return { success: false, msg: '无录单权限' };
+      const validationError = validateCreateOrder(data);
+      if (validationError) return { success: false, msg: validationError };
       const wantsAssignment = Boolean(data && (data.workerName || data.workerPhone || data.workerGroupId));
       if (user.role !== 'leader' && wantsAssignment) return { success: false, msg: '客服录单后请由主管派单' };
       const createFields = ['city', 'customerPhone', 'address', 'appointmentTime', 'source', 'totalAmount', 'paidAmount', 'pendingBalance', 'feedbacks'];
       if (user.role === 'leader') createFields.push(...fields.assign);
       const payload = pick(data, createFields);
+      if (Array.isArray(payload.feedbacks)) {
+        payload.feedbacks = payload.feedbacks.map(item => ({
+          id: item.id || `fb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          time: item.time || new Date().toISOString(),
+          timeFormatted: item.timeFormatted || item.time || '',
+          operatorName: String(item.operatorName || item.author || user.name || '客服').trim(),
+          operatorRole: item.operatorRole || user.role || 'service',
+          content: String(item.content || '').trim(),
+          photos: Array.isArray(item.photos) ? item.photos : (Array.isArray(item.images) ? item.images : [])
+        })).filter(item => item.content);
+      }
       const cities = Array.isArray(user.cities) ? user.cities : [];
       if (payload.city && cities.length && !cities.includes(payload.city)) return { success: false, msg: '无权录入该城市工单' };
       Object.assign(payload, { creatorName: user.name, createTime: new Date().toISOString(), status: payload.workerName ? '已派单' : '待派单' });
@@ -317,6 +375,8 @@ exports.main = async (event = {}) => {
     } else if (action === 'finishOrder') {
       if (!canSettle(user, order)) return { success: false, msg: '无结算权限' };
       if (order.status === '未成单') return { success: false, msg: '未成单不可结算' };
+      const validationError = validateSettlement(data);
+      if (validationError) return { success: false, msg: validationError };
       await db.collection('orders').doc(orderId).update({ data: pick(data, fields.finish) });
     } else if (action === 'feedback') {
       if (!hasRole(user, ['service', 'leader', 'worker'])) return { success: false, msg: '无回馈权限' };

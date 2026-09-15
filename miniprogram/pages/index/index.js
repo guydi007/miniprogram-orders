@@ -73,8 +73,7 @@ Page({
     editUserCitiesMap: {},
     editUserGroupId: '',
     editUserWebhookUrl: '',
-    // TODO: 完善提醒样式、模板和真机验证后，再开放首页订阅入口。
-    notificationEntryEnabled: false,
+    notificationEntryEnabled: true,
     notificationTemplates: [],
     newOrderTemplateConfigured: false,
     subscriptionBusy: false,

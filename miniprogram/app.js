@@ -1,3 +1,7 @@
+const version = require('./config/version');
+const updateService = require('./services/update-service');
+const api = require('./services/api');
+
 App({
   globalData: {
     currentUser: null,
@@ -5,9 +9,14 @@ App({
     authVerified: false,
     workerList: [],
     availableCities: ['天津', '北京']
+    ,updateAvailable: false
+    ,updatePromptShown: false
+    ,clientPolicy: null
   },
 
   onLaunch() {
+    updateService.install(this);
+    updateService.migrateCache();
     if (!wx.cloud) {
       console.error('请使用 2.2.3 或以上的基础库以使用云能力');
     } else {
@@ -15,31 +24,53 @@ App({
         env: 'cloud1-2g9qjh1nf5e56557',
         traceUser: true
       });
+      this.installApiVersioning();
 
-      this.checkAppUpdate();
+      this.checkClientPolicy();
       this.checkUserAuth().finally(() => {
         this.globalData.authVerified = true;
       });
     }
   },
 
-  checkAppUpdate() {
-    if (wx.canIUse('getUpdateManager')) {
-      const updateManager = wx.getUpdateManager();
-      updateManager.onUpdateReady(() => {
-        wx.showModal({
-          title: '🔄 更新提示',
-          content: '系统已更新到最新版本，点击确定立即重启。',
-          showCancel: false,
-          confirmText: '立即重启',
-          success: (res) => {
-            if (res.confirm) {
-              updateManager.applyUpdate();
-            }
-          }
+  onShow() {
+    this.checkClientPolicy();
+  },
+
+  checkClientPolicy(force) {
+    if (!wx.cloud || (this._policyPromise && !force)) return this._policyPromise;
+    this._policyPromise = api.callFunction({ name: 'manageOrder', data: { action: 'getClientPolicy' } })
+      .then(res => {
+        const policy = res.result || {};
+        this.globalData.clientPolicy = policy;
+        if (policy.code === 'CLIENT_UPDATE_REQUIRED' && policy.minReadBuild && version.BUILD_NO < policy.minReadBuild) {
+          wx.reLaunch({ url: '/pages/update/update' });
+        }
+        return policy;
+      }).catch(err => console.warn('版本策略检查失败：', err))
+      .finally(() => { this._policyPromise = null; });
+    return this._policyPromise;
+  },
+
+  handleClientPolicy(policy) {
+    this.globalData.clientPolicy = policy;
+    if (policy.minReadBuild && version.BUILD_NO < policy.minReadBuild) wx.reLaunch({ url: '/pages/update/update' });
+  },
+
+  installApiVersioning() {
+    if (wx.cloud.__versionedCallFunction) return;
+    const original = wx.cloud.callFunction.bind(wx.cloud);
+    const app = this;
+    wx.cloud.callFunction = (options = {}) => {
+      const data = options.data && typeof options.data === 'object' ? options.data : {};
+      return original({ ...options, data: { ...data, clientVersion: version.APP_VERSION, buildNo: version.BUILD_NO, apiSchema: version.API_SCHEMA } })
+        .then(res => {
+          const result = res && res.result || {};
+          if (result.code === 'CLIENT_UPDATE_REQUIRED') app.handleClientPolicy(result.policy || result);
+          return res;
         });
-      });
-    }
+    };
+    wx.cloud.__versionedCallFunction = true;
   },
 
   // 用户身份与 OpenID 核验

@@ -5,7 +5,12 @@
     "fields": { "thing9": "address", "thing4": "reason" }
   },
   "newOrder": {
-    "templateId": "",
-    "fields": {}
+    "templateId": "EpuvkayKRzofgw4aHDoATj7rWfxP4GS7CPJtHYANfOI",
+    "fields": {
+      "time7": "appointmentTime",
+      "phone_number18": "customerPhone",
+      "thing22": "address",
+      "time23": "createTime"
+    }
   }
 }

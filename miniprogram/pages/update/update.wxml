@@ -1,0 +1,8 @@
+<view class="page">
+  <view class="card">
+    <view class="icon">↻</view>
+    <view class="title">需要更新后继续使用</view>
+    <view class="desc">当前版本过旧，无法保证订单和结算数据正常工作。请发布新版本后重新进入。</view>
+    <button class="button" bindtap="retry">重新检查</button>
+  </view>
+</view>

@@ -261,10 +261,13 @@ Page({
       paidAmount: 0,
       pendingBalance: 0,
       feedbacks: finalFeedback ? [{
-        time: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        author: creatorName,
+        id: 'fb_' + Date.now(),
+        time: new Date().toISOString(),
+        timeFormatted: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        operatorName: creatorName,
+        operatorRole: (currentUser && currentUser.role) || 'service',
         content: `【录单回馈】${finalFeedback}`,
-        images: []
+        photos: []
       }] : [],
     };
 

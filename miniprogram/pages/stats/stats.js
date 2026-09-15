@@ -198,8 +198,11 @@ Page({
         creators: uniqueCreators,
         creatorFilterNames: creatorNames
       }, () => {
-        this.processRevenueStats();
-        this.processServiceStats();
+        // 等待页面数据和筛选条件完成同一轮渲染，避免首次进入时营收模块使用旧的空数组。
+        wx.nextTick(() => {
+          this.processRevenueStats();
+          this.processServiceStats();
+        });
       });
       wx.hideLoading();
     } catch (err) {
