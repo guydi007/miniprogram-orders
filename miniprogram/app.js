@@ -15,6 +15,7 @@ App({
   },
 
   onLaunch() {
+    this._appLaunched = true;
     updateService.install(this);
     updateService.migrateCache();
     if (!wx.cloud) {
@@ -26,7 +27,6 @@ App({
       });
       this.installApiVersioning();
 
-      this.checkClientPolicy();
       this.checkUserAuth().finally(() => {
         this.globalData.authVerified = true;
       });
@@ -34,18 +34,21 @@ App({
   },
 
   onShow() {
-    this.checkClientPolicy();
+    // 版本策略只在进入前台时检查；避免启动阶段和 onShow 重复请求/重复切页。
+    if (this._policyTimer) clearTimeout(this._policyTimer);
+    this._policyTimer = setTimeout(() => {
+      this._policyTimer = null;
+      if (this._appLaunched) this.checkClientPolicy();
+    }, 500);
   },
 
   checkClientPolicy(force) {
-    if (!wx.cloud || (this._policyPromise && !force)) return this._policyPromise;
+    if (!wx.cloud || this._policyPromise) return this._policyPromise;
     this._policyPromise = api.callFunction({ name: 'manageOrder', data: { action: 'getClientPolicy' } })
       .then(res => {
         const policy = res.result || {};
         this.globalData.clientPolicy = policy;
-        if (policy.code === 'CLIENT_UPDATE_REQUIRED' && policy.minReadBuild && version.BUILD_NO < policy.minReadBuild) {
-          wx.reLaunch({ url: '/pages/update/update' });
-        }
+        if (policy.code === 'CLIENT_UPDATE_REQUIRED') this.handleClientPolicy(policy);
         return policy;
       }).catch(err => console.warn('版本策略检查失败：', err))
       .finally(() => { this._policyPromise = null; });
@@ -54,7 +57,13 @@ App({
 
   handleClientPolicy(policy) {
     this.globalData.clientPolicy = policy;
-    if (policy.minReadBuild && version.BUILD_NO < policy.minReadBuild) wx.reLaunch({ url: '/pages/update/update' });
+    if (policy.minReadBuild && version.BUILD_NO < policy.minReadBuild && !this._updatePageOpening) {
+      this._updatePageOpening = true;
+      wx.reLaunch({ url: '/pages/update/update', fail: error => {
+        this._updatePageOpening = false;
+        console.warn('打开强制更新页失败：', error && error.errMsg);
+      } });
+    }
   },
 
   installApiVersioning() {

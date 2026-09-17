@@ -75,6 +75,7 @@ Page({
 
     modalCompanions: '',
     modalNote: '',
+    correctionReason: '',
     localPhotos: [],
 
     showFeedbackModal: false,
@@ -87,9 +88,9 @@ Page({
     const isLeader = role === 'leader';
     const isServiceOrLeader = role === 'admin' || role === 'service' || role === 'leader';
     const isWorkerOrLeader = role === 'worker' || role === 'leader';
-    const canOperateSettle = isLeader || (role === 'worker' && order && user && order.workerName === user.name);
+    const canOperateSettle = isLeader || (role === 'worker' && order && user && user.phone && order.workerPhone === user.phone);
     const canEditAppointment = Boolean(order && !['已完工', '未成单'].includes(order.status) &&
-      (role === 'service' || isLeader || (role === 'worker' && user && order.workerName === user.name)));
+      (role === 'service' || isLeader || (role === 'worker' && user && user.phone && order.workerPhone === user.phone)));
 
     this.setData({
       currentUser: user,
@@ -200,7 +201,7 @@ Page({
       const matched = result.workers || [];
       this.setData({
         candidateWorkers: matched,
-        candidateWorkerNames: matched.map(w => w.name + (w.role === 'leader' ? ' [主管]' : '') + (w.groupId ? ` (${w.groupId})` : ''))
+        candidateWorkerNames: matched.map(w => w.name + (w.role === 'leader' ? ' [主管]' : ''))
       });
     }).catch(e => console.error('获取师傅列表失败：', e));
   },
@@ -220,7 +221,7 @@ Page({
     const updateData = {
       workerName: worker.name,
       workerPhone: worker.phone || '',
-      workerGroupId: worker.groupId || '',
+      workerGroupId: '',
       status: '已派单'
     };
 
@@ -240,7 +241,7 @@ Page({
         this.setData({
           'order.workerName': updateData.workerName,
           'order.workerPhone': updateData.workerPhone,
-          'order.workerGroupId': updateData.workerGroupId,
+          'order.workerGroupId': '',
           'order.status': updateData.status
         });
         this.updatePermissions(this.data.order, this.data.currentUser);
@@ -640,6 +641,10 @@ Page({
     this.setData({ modalNote: e.detail.value.trim() });
   },
 
+  onCorrectionReasonInput(e) {
+    this.setData({ correctionReason: e.detail.value.trim() });
+  },
+
   openFinishModal() {
     const o = this.data.order || {};
     const cash = o.cashAmount ? String(o.cashAmount) : '';
@@ -657,6 +662,7 @@ Page({
       inputAlipay: alipay,
       modalCompanions: companions,
       modalNote: '',
+      correctionReason: '',
       localPhotos: [],
       initialSnapshot: {
         cash: cash,
@@ -690,6 +696,7 @@ Page({
       inputTotalAmount: total,
       modalCompanions: companions,
       modalNote: '',
+      correctionReason: '',
       localPhotos: [],
       initialSnapshot: {
         cash: cash,
@@ -738,7 +745,9 @@ Page({
   },
 
   async submitFinishOrder() {
-    const { settleMode, inputCash, inputWechat, inputAlipay, inputTotalAmount, fullTotal, depositTotal, remainTotal, modalCompanions, modalNote, localPhotos, orderId, order, currentUser, initialSnapshot } = this.data;
+    const { settleMode, inputCash, inputWechat, inputAlipay, inputTotalAmount, fullTotal, depositTotal, remainTotal, modalCompanions, modalNote, correctionReason, localPhotos, orderId, order, currentUser, initialSnapshot } = this.data;
+    const operationId = this._paymentOperationId || ('op_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+    this._paymentOperationId = operationId;
 
     const existingChannels = settleMode === 'prepay' ? (this.data.existingPrepayChannels || {}) : {};
     const cash = (Number(inputCash) || 0) + (Number(existingChannels.cash) || 0);
@@ -848,16 +857,17 @@ Page({
         data: {
           action: 'finishOrder',
           orderId: orderId,
-          data: updateData
+          data: { ...updateData, operationId, operationType: (order && order.settleType) ? ((settleMode === 'prepay' && paidSum > Number(order.depositAmount || 0)) ? (remainTotal === 0 ? 'final_payment' : 'additional_payment') : 'amount_correction') : (settleMode === 'full' ? 'full_payment' : 'deposit_payment'), amountThisTime: settleMode === 'prepay' ? Math.max(0, paidSum - Number(order && order.depositAmount || 0)) : paidSum, correctionReason: correctionReason || modalNote || '' }
         }
       });
 
       wx.hideLoading();
       const result = res.result || {};
       if (result.success) {
+        this._paymentOperationId = null;
         this.setData({ showFinishModal: false });
         wx.showToast({
-          title: settleMode === 'full' ? '全款结单已留痕！' : '预付定金已留痕！',
+          title: result.notification && !result.notification.success ? '订单已保存，群通知待处理' : (settleMode === 'full' ? '全款结单已留痕！' : '预付定金已留痕！'),
           icon: 'success'
         });
         this.fetchOrderDetail(orderId);

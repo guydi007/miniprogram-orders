@@ -2,9 +2,7 @@ const { recipients, notifyGroup, postWebhook } = require('./groupNotifications')
 const templates = require('./notificationTemplates.json');
 
 function getNotificationConfig(user) {
-  const types = user.role === 'leader' ? ['urgent', 'newOrder'] : (user.role === 'worker' ? ['urgent'] : []);
-  return types.filter(type => templates[type].templateId && Object.keys(templates[type].fields).length)
-    .map(type => ({ type, templateId: templates[type].templateId }));
+  return [];
 }
 
 function receiverOpenid(user) {
@@ -30,6 +28,8 @@ function templateData(type, order) {
 }
 
 async function notifyAll(cloud, db, type, order, operator, sendWebhook = postWebhook) {
+  return { success: true, status: 'SUPPRESSED', sent: 0, missing: 0, msg: '个人订阅通知已停用，请使用企业微信群' };
+  /* legacy implementation retained below for historical compatibility */
   const summary = { success: false, sent: 0, missing: 0, results: [], subscription: [], webhook: null };
   try {
     const users = await recipients(db, type, order, operator);

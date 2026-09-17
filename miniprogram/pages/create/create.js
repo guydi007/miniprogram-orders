@@ -132,7 +132,7 @@ Page({
       const result = res.result || {};
       if (!result.success) throw new Error(result.msg || 'WORKERS_UNAVAILABLE');
       const workers = result.workers || [];
-      const workerNames = ['暂不指派（保持待派单）', ...workers.map(w => w.name + (w.role === 'leader' ? ' [主管]' : '') + (w.groupId ? ` (${w.groupId})` : ''))];
+      const workerNames = ['暂不指派（保持待派单）', ...workers.map(w => w.name + (w.role === 'leader' ? ' [主管]' : ''))];
       this.setData({
         workers: workers,
         workerNames: workerNames,
@@ -256,7 +256,6 @@ Page({
       status: status,
       workerName: workerName,
       workerPhone: workerPhone,
-      workerGroupId: workerGroupId,
       totalAmount: totalAmount ? Number(totalAmount) : 0,
       paidAmount: 0,
       pendingBalance: 0,
@@ -280,7 +279,16 @@ Page({
       if (notification && notification.success) {
         wx.showToast({ title: '录单成功，主管已通知', icon: 'none' });
       } else {
-        await new Promise(resolve => wx.showModal({ title: '工单已保存', content: '主管提醒未全部发送成功，可能未订阅或模板未配置。请联系主管查看，不要重复录单。', showCancel: false, success: resolve, fail: resolve }));
+        const eventId = res.result.eventId || '未知';
+        const code = notification && notification.code;
+        const reason = code === 'NO_GROUP_CONFIGURED'
+          ? '没有找到该城市已启用的正式入单群配置。'
+          : code === 'NO_TEST_GROUP_CONFIGURED'
+            ? '这是测试账号，但没有找到该城市已启用的测试入单群配置。'
+            : code === 'NOTIFICATION_PROCESSING_FAILED'
+              ? '云端处理群通知时发生异常，请管理员根据事件编号查看云函数日志。'
+              : `群通知状态：${(notification && notification.status) || '未确认'}${code ? `（${code}）` : ''}。请管理员根据事件编号检查投递记录。`;
+        await new Promise(resolve => wx.showModal({ title: '工单已保存', content: `${reason}\n事件编号：${eventId}\n请勿重复录单。`, showCancel: false, success: resolve, fail: resolve }));
       }
       setTimeout(() => wx.navigateBack(), 1000);
     } catch (err) {

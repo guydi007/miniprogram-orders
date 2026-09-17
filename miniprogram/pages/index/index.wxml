@@ -51,13 +51,6 @@
     </view>
   </view>
 
-  <!-- TODO: 订阅提醒暂不开放；完成模板配置和真机验证后再启用。 -->
-  <view class="card notification-card" wx:if="{{ notificationEntryEnabled && currentUser && (currentUser.role === 'worker' || currentUser.role === 'leader') }}">
-    <button class="notification-subscribe-button" bindtap="subscribeNotifications" loading="{{subscriptionBusy}}" disabled="{{subscriptionBusy}}">订阅微信提醒</button>
-    <view class="notification-description">师傅接收催单，主管接收新工单和催单提醒。需要本人点击订阅，不能一次开启永久接收。</view>
-    <view class="notification-hint" wx:if="{{subscriptionHint}}">{{subscriptionHint}}</view>
-    <view class="notification-hint" wx:if="{{ currentUser.role === 'leader' && !newOrderTemplateConfigured }}">新工单订阅模板尚未配置或正在加载，当前仅可订阅催单提醒。</view>
-  </view>
 
   <!-- 2. 城市过滤筛选栏 -->
   <view class="admin-city-bar" wx:if="{{ currentUser && (currentUser.role === 'admin' || currentUser.role === 'service' || currentUser.role === 'leader') && userVisibleCities.length > 0 }}">
@@ -250,6 +243,7 @@
         <view class="type-btn {{ userManageTab === 'list' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="list">👥 员工 ({{ allUserList.length }})</view>
         <view class="type-btn {{ userManageTab === 'add' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="add">➕ 录入</view>
         <view class="type-btn {{ userManageTab === 'source' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="source">🏷️ 渠道 ({{ allSourceList.length }})</view>
+        <view class="type-btn {{ userManageTab === 'groups' ? 'type-active' : '' }}" bindtap="switchUserTab" data-tab="groups">🔗 群管 ({{ notificationGroups.length }})</view>
       </view>
 
       <!-- 员工列表 Tab -->
@@ -263,7 +257,6 @@
             </view>
             <text class="u-phone">📞 {{ item.phone || '无电话' }}</text>
             <text class="u-sub">📍 城市：{{ item.citiesText }}</text>
-            <text class="u-sub" wx:if="{{ item.role === 'worker' && item.groupId }}">🏷️ 群号：{{ item.groupId }}</text>
             <text class="u-status {{ item.isTest ? 'test-status' : (item.openid ? 'bound' : 'unbound') }}">
               {{ item.isTest ? '🧪 免锁测试' : (item.openid ? '🟢 已绑定微信' : '⚪ 待扫码绑定') }}
             </text>
@@ -322,16 +315,6 @@
             </checkbox-group>
           </view>
 
-          <view class="mt-16" wx:if="{{ newUserRole === 'worker' }}">
-            <text class="field-title">专属工作群号 / 群标识：</text>
-            <input 
-              class="modal-input" 
-              placeholder="如：TJ-01、BJ-01（无群可留空）" 
-              value="{{ newUserGroupId }}" 
-              bindinput="onNewUserGroupIdInput" 
-            />
-          </view>
-
           <view class="test-switch-row mt-16">
             <text class="test-switch-label">🧪 设为免锁测试号：</text>
             <switch checked="{{ newUserIsTest }}" color="#07c160" bindchange="onNewUserIsTestChange" />
@@ -339,6 +322,33 @@
           <view class="test-switch-tip">开启后该账号不绑定任何微信，可在多台手机随时切换登录用于测试。</view>
 
           <button class="btn-primary mt-20" bindtap="submitAddUser">确认录入</button>
+        </view>
+      </scroll-view>
+
+      <!-- 群管理 Tab -->
+      <scroll-view scroll-y class="modal-scroll-area" wx:if="{{ userManageTab === 'groups' }}">
+        <view class="form-group-box">
+          <view class="user-manage-item" wx:for="{{ notificationGroups }}" wx:key="_id">
+            <view class="u-info">
+              <view class="u-name-line"><text class="u-name">{{ item.groupName }}</text><text class="group-type-pill {{ item.groupType === 'order_entry' ? 'group-type-entry' : (item.groupType === 'deal' ? 'group-type-deal' : 'group-type-unconverted') }}">{{ item.groupTypeLabel }}</text><text class="test-icon-badge" wx:if="{{ item.isTestGroup }}">🧪 测试</text></view>
+              <text class="u-sub">📍 {{ item.city }}　📞 {{ item.phone }}</text>
+              <text class="u-sub">🔐 {{ item.webhookMasked || '未配置' }}　{{ item.enabled ? '启用' : '已停用' }}</text>
+            </view>
+            <view><button class="btn-edit-user" size="mini" bindtap="editNotificationGroup" data-group="{{ item }}">编辑</button><button wx:if="{{ item.enabled }}" class="btn-del-source" size="mini" bindtap="disableNotificationGroup" data-id="{{ item._id }}" data-version="{{ item.version }}">停用</button><button wx:else class="btn-edit-user" size="mini" bindtap="enableNotificationGroup" data-id="{{ item._id }}" data-version="{{ item.version }}">启用</button></view>
+          </view>
+          <view class="empty-stats" wx:if="{{ notificationGroups.length === 0 }}">暂无群配置</view>
+          <view class="form-group-box group-add-box">
+            <text class="field-title">{{ editingGroupId ? '编辑通知群' : '新增通知群' }}</text>
+            <input class="modal-input" placeholder="群名" value="{{ groupNameInput }}" bindinput="onGroupNameInput" />
+            <picker class="group-city-picker mt-16" range="{{ availableCities }}" value="{{ groupCityIndex }}" bindchange="onGroupCityChange">
+              <view class="group-city-picker-inner"><text>{{ availableCities[groupCityIndex] || '请选择所属城市' }}</text><text class="group-city-arrow">⌄</text></view>
+            </picker>
+            <input class="modal-input mt-16" type="number" maxlength="11" placeholder="群内@手机号" value="{{ groupPhoneInput }}" bindinput="onGroupPhoneInput" />
+            <picker class="modal-input picker-input mt-16" range="{{ groupTypeOptions }}" bindchange="onGroupTypeChange"><view>{{ groupTypeOptions[groupTypeIndex] }}</view></picker>
+            <input class="modal-input mt-16" password="{{true}}" placeholder="Webhook（编辑时留空表示保持原地址）" value="{{ groupWebhookInput }}" bindinput="onGroupWebhookInput" />
+            <view class="test-switch-row mt-16"><text class="test-switch-label">测试群</text><switch checked="{{ groupIsTest }}" bindchange="onGroupTestChange" /></view>
+            <button class="btn-primary mt-20" bindtap="createNotificationGroup">{{ editingGroupId ? '保存群配置' : '新增群配置' }}</button>
+          </view>
         </view>
       </scroll-view>
 
@@ -417,27 +427,9 @@
             </checkbox-group>
           </view>
 
-          <view class="mt-16" wx:if="{{ editUserRole === 'worker' }}">
-            <text class="field-title">专属工作群号 / 群标识：</text>
-            <input 
-              class="modal-input" 
-              placeholder="如：TJ-01、BJ-01（无群可留空）" 
-              value="{{ editUserGroupId }}" 
-              bindinput="onEditUserGroupIdInput" 
-            />
-          </view>
-
           <view class="test-switch-row mt-16">
             <text class="test-switch-label">🧪 设为免锁测试号：</text>
             <switch checked="{{ editUserIsTest }}" color="#07c160" bindchange="onEditUserIsTestChange" />
-          </view>
-
-          <view class="mt-16" wx:if="{{ editUserRole === 'worker' || editUserRole === 'leader' }}">
-            <text class="field-title">企业微信群机器人 Webhook（密钥，请勿分享）：</text>
-            <input class="modal-input" password="{{true}}" value="{{ editUserWebhookUrl }}"
-              placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…"
-              bindinput="onEditUserWebhookInput" />
-            <text class="field-title">测试账号请配置测试群；群号不能代替机器人地址。</text>
           </view>
 
           <view class="bind-manage-section mt-16">

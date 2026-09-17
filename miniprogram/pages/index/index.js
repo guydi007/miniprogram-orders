@@ -56,7 +56,6 @@ Page({
     newUserPhone: '',
     newUserRole: 'worker',
     newUserIsTest: false,
-    newUserGroupId: '',
     newUserCities: ['天津'],
     newUserCitiesMap: { '天津': true },
 
@@ -71,13 +70,23 @@ Page({
     editUserIsTest: false,
     editUserCities: [],
     editUserCitiesMap: {},
-    editUserGroupId: '',
-    editUserWebhookUrl: '',
-    notificationEntryEnabled: true,
+    // 设计书明确不启用个人订阅消息，订单通知统一走企业微信群。
+    notificationEntryEnabled: false,
     notificationTemplates: [],
     newOrderTemplateConfigured: false,
     subscriptionBusy: false,
     subscriptionHint: ''
+    ,notificationGroups: []
+    ,groupNameInput: ''
+    ,groupCityInput: ''
+    ,groupCityIndex: 0
+    ,groupPhoneInput: ''
+    ,groupWebhookInput: ''
+    ,groupTypeOptions: ['入单群', '成单群', '未成单群']
+    ,groupTypeIndex: 0
+    ,groupIsTest: false
+    ,editingGroupId: ''
+    ,editingGroupVersion: 0
   },
 
   onLoad() {
@@ -129,7 +138,7 @@ Page({
       const workers = result.workers || [];
       this.setData({
         candidateWorkers: workers,
-        candidateWorkerNames: ['请选择师傅', ...workers.map(w => w.name + (w.role === 'leader' ? ' [主管]' : '') + (w.groupId ? ` (${w.groupId})` : ''))]
+        candidateWorkerNames: ['请选择师傅', ...workers.map(w => w.name + (w.role === 'leader' ? ' [主管]' : ''))]
       });
     }).catch(e => console.error('获取师傅列表失败：', e));
   },
@@ -244,7 +253,7 @@ Page({
     const updateData = {
       workerName: worker.name,
       workerPhone: worker.phone || '',
-      workerGroupId: worker.groupId || '',
+      workerGroupId: '',
       status: '已派单'
     };
 
@@ -382,7 +391,6 @@ Page({
     }, () => {
       this.updateUserVisibleCities();
       this.fetchOrders();
-      this.loadNotificationConfig();
       if (checkCanAssign(user)) {
         this.fetchCandidateWorkers();
       }
@@ -615,18 +623,8 @@ Page({
       });
     }
 
-    const counts = {
-      all: list.length,
-      '待派单': list.filter(o => o.status === '待派单').length,
-      '已派单': list.filter(o => o.status === '已派单').length,
-      '已完工': list.filter(o => o.status === '已完工').length,
-      '未成单': list.filter(o => o.status === '未成单').length
-    };
-
-    if (currentTab !== 'all') {
-      list = list.filter(o => o.status === currentTab);
-    }
-
+    // 关键词与城市、时间条件共同决定标签数量；当前状态标签本身不参与计数，
+    // 这样切换标签时仍能看见同一筛选范围内各状态的数量。
     if (searchKey && searchKey.trim()) {
       const kw = searchKey.trim().toLowerCase();
       list = list.filter(o =>
@@ -637,6 +635,18 @@ Page({
         ((o.appointmentTime || '').toLowerCase().includes(kw)) ||
         ((o.source || '').toLowerCase().includes(kw))
       );
+    }
+
+    const counts = {
+      all: list.length,
+      '待派单': list.filter(o => o.status === '待派单').length,
+      '已派单': list.filter(o => o.status === '已派单').length,
+      '已完工': list.filter(o => o.status === '已完工').length,
+      '未成单': list.filter(o => o.status === '未成单').length
+    };
+
+    if (currentTab !== 'all') {
+      list = list.filter(o => o.status === currentTab);
     }
 
     this.setData({
@@ -707,13 +717,13 @@ Page({
       newUserPhone: '',
       newUserRole: 'worker',
       newUserIsTest: false,
-      newUserGroupId: '',
       newUserCities: [defaultCity],
       newUserCitiesMap: { [defaultCity]: true },
       newSourceName: ''
     });
     this.fetchAllUsers();
     this.fetchSources();
+    this.fetchNotificationGroups();
   },
 
   closeUserManageModal() {
@@ -721,7 +731,88 @@ Page({
   },
 
   switchUserTab(e) {
-    this.setData({ userManageTab: e.currentTarget.dataset.tab });
+    const tab = e.currentTarget.dataset.tab;
+    this.setData({ userManageTab: tab });
+    if (tab === 'groups') this.fetchNotificationGroups();
+  },
+
+  fetchNotificationGroups() {
+    wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getNotificationGroups' } }).then(res => {
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'GROUPS_UNAVAILABLE');
+      this.setData({ notificationGroups: result.groups || [] });
+    }).catch(error => { console.error('获取通知群失败：', error); wx.showToast({ title: '群配置加载失败', icon: 'none' }); });
+  },
+
+  onGroupInput(e) {
+    this.setData({ [e.currentTarget.dataset.key]: (e.detail.value || '').trim() });
+  },
+
+  onGroupNameInput(e) {
+    this.setData({ groupNameInput: String(e.detail.value || '').trim() });
+  },
+
+  onGroupPhoneInput(e) {
+    this.setData({ groupPhoneInput: String(e.detail.value || '').replace(/\D/g, '').slice(0, 11) });
+  },
+
+  onGroupWebhookInput(e) {
+    const value = String(e.detail.value || '').trim();
+    this.setData({ groupWebhookInput: value });
+  },
+
+  onGroupTypeChange(e) { this.setData({ groupTypeIndex: Number(e.detail.value) || 0 }); },
+  onGroupCityChange(e) {
+    const index = Number(e.detail.value) || 0;
+    const city = this.data.availableCities[index] || '';
+    this.setData({ groupCityIndex: index, groupCityInput: city });
+  },
+  onGroupTestChange(e) { this.setData({ groupIsTest: Boolean(e.detail.value) }); },
+
+  editNotificationGroup(e) {
+    const group = e.currentTarget.dataset.group || {};
+    const types = ['order_entry', 'deal', 'unconverted'];
+    const cityIndex = Math.max(0, this.data.availableCities.indexOf(group.city));
+    this.setData({ editingGroupId: group._id || '', editingGroupVersion: Number(group.version || 1), groupNameInput: group.groupName || '', groupCityInput: this.data.availableCities[cityIndex] || '', groupCityIndex: cityIndex, groupPhoneInput: group.phone || '', groupWebhookInput: '', groupTypeIndex: Math.max(0, types.indexOf(group.groupType)), groupIsTest: Boolean(group.isTestGroup) });
+  },
+
+  async createNotificationGroup() {
+    if (!checkIsAdmin(this.data.currentUser)) return wx.showToast({ title: '无权操作', icon: 'none' });
+    const { groupNameInput, groupPhoneInput, groupWebhookInput, groupTypeIndex, groupIsTest, editingGroupId, editingGroupVersion } = this.data;
+    // Picker 的展示值来自 availableCities[groupCityIndex]；首次默认展示时
+    // change 事件不会触发，因此保存时也要从当前 picker 索引兜底取值。
+    const groupCityInput = String(this.data.groupCityInput || this.data.availableCities[this.data.groupCityIndex] || '').trim();
+    if (!groupNameInput) return wx.showToast({ title: '请填写群名', icon: 'none' });
+    if (!groupCityInput) return wx.showToast({ title: '请填写所属城市', icon: 'none' });
+    if (!/^1\d{10}$/.test(groupPhoneInput)) return wx.showToast({ title: '请填写正确的11位手机号', icon: 'none' });
+    if (!editingGroupId && !groupWebhookInput) return wx.showToast({ title: '请填写企业微信群机器人 Webhook', icon: 'none' });
+    const types = ['order_entry', 'deal', 'unconverted'];
+    try {
+      const res = await wx.cloud.callFunction({ name: 'manageOrder', data: editingGroupId ? { action: 'updateNotificationGroup', groupId: editingGroupId, data: { groupName: groupNameInput, city: groupCityInput, phone: groupPhoneInput, webhookUrl: groupWebhookInput, groupType: types[groupTypeIndex], isTestGroup: groupIsTest, version: editingGroupVersion } } : { action: 'createNotificationGroup', data: { groupName: groupNameInput, city: groupCityInput, phone: groupPhoneInput, webhookUrl: groupWebhookInput, groupType: types[groupTypeIndex], isTestGroup: groupIsTest, enabled: true } } });
+      if (!(res.result || {}).success) throw new Error((res.result || {}).msg || 'CREATE_GROUP_FAILED');
+      this.setData({ groupNameInput: '', groupCityInput: '', groupCityIndex: 0, groupPhoneInput: '', groupWebhookInput: '', groupIsTest: false, editingGroupId: '', editingGroupVersion: 0 });
+      this.fetchNotificationGroups(); wx.showToast({ title: '群配置已保存', icon: 'success' });
+    } catch (error) { wx.showToast({ title: error.message || '保存失败', icon: 'none' }); }
+  },
+
+  disableNotificationGroup(e) {
+    wx.showModal({ title: '确认停用群配置？', content: '停用后不会再发送新通知，历史记录保留。', success: async res => {
+      if (!res.confirm) return;
+      const result = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'deleteNotificationGroup', groupId: e.currentTarget.dataset.id, data: { version: Number(e.currentTarget.dataset.version) } } });
+      if (!(result.result || {}).success) return wx.showToast({ title: (result.result || {}).msg || '停用失败', icon: 'none' });
+      this.fetchNotificationGroups(); wx.showToast({ title: '已停用', icon: 'success' });
+    } });
+  },
+
+  async enableNotificationGroup(e) {
+    try {
+      const result = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'updateNotificationGroup', groupId: e.currentTarget.dataset.id, data: { enabled: true, version: Number(e.currentTarget.dataset.version) } } });
+      if (!(result.result || {}).success) return wx.showToast({ title: (result.result || {}).msg || '启用失败', icon: 'none' });
+      this.fetchNotificationGroups();
+      wx.showToast({ title: '群配置已启用', icon: 'success' });
+    } catch (error) {
+      wx.showToast({ title: error.message || '启用失败', icon: 'none' });
+    }
   },
 
   fetchAllUsers() {
@@ -821,10 +912,6 @@ Page({
     this.setData({ newUserPhone: (e.detail.value || '').trim() });
   },
 
-  onNewUserGroupIdInput(e) {
-    this.setData({ newUserGroupId: (e.detail.value || '').trim() });
-  },
-
   onNewUserRoleChange(e) {
     this.setData({ newUserRole: e.detail.value });
   },
@@ -851,7 +938,6 @@ Page({
     const phone = (this.data.newUserPhone || '').trim();
     const role = this.data.newUserRole || 'worker';
     const cities = this.data.newUserCities || [];
-    const groupId = (this.data.newUserGroupId || '').trim();
     const isTest = Boolean(this.data.newUserIsTest);
 
     if (role === 'admin') {
@@ -868,7 +954,6 @@ Page({
         phone: phone,
         role: role,
         cities: cities,
-        groupId: role === 'worker' ? groupId : '',
         isTest: isTest
       };
       const response = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'createUser', data: userData } });
@@ -881,7 +966,6 @@ Page({
       this.setData({
         newUserName: '',
         newUserPhone: '',
-        newUserGroupId: '',
         newUserCities: [defaultCity],
         newUserCitiesMap: { [defaultCity]: true },
         newUserIsTest: false,
@@ -919,8 +1003,6 @@ Page({
       editUserIsTest: Boolean(user.isTest),
       editUserCities: citiesArr,
       editUserCitiesMap: map,
-      editUserGroupId: user.groupId || '',
-      editUserWebhookUrl: user.webhookUrl || ''
     });
   },
 
@@ -953,59 +1035,15 @@ Page({
     });
   },
 
-  onEditUserGroupIdInput(e) {
-    this.setData({
-      editUserGroupId: (e.detail.value || '').trim()
-    });
-  },
-
   onEditUserIsTestChange(e) {
     this.setData({ editUserIsTest: e.detail.value });
-  },
-
-  async loadNotificationConfig() {
-    if (!this.data.notificationEntryEnabled) return;
-    const phone = this.data.currentUser && this.data.currentUser.phone;
-    try {
-      const res = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getNotificationConfig' } });
-      if (!this.data.currentUser || this.data.currentUser.phone !== phone) return;
-      const templates = res.result && res.result.success ? res.result.templates || [] : [];
-      this.setData({ notificationTemplates: templates, newOrderTemplateConfigured: templates.some(item => item.type === 'newOrder') });
-    } catch (error) { this.setData({ subscriptionHint: '订阅配置加载失败，请稍后重试' }); }
-  },
-
-  subscribeNotifications() {
-    if (!this.data.notificationEntryEnabled) return;
-    if (this.data.subscriptionBusy) return;
-    const list = this.data.notificationTemplates || [];
-    if (!list.length) {
-      this.loadNotificationConfig();
-      return wx.showToast({ title: '模板未配置或加载中，请稍后再点', icon: 'none' });
-    }
-    if (!wx.requestSubscribeMessage) return wx.showToast({ title: '请升级微信后再订阅', icon: 'none' });
-    const tmplIds = [...new Set(list.map(item => item.templateId))].slice(0, 3);
-    this.setData({ subscriptionBusy: true });
-    // 直接由用户点击触发，不在此之前等待异步云函数。
-    wx.requestSubscribeMessage({
-      tmplIds,
-      success: res => {
-        const accepted = tmplIds.filter(id => res[id] === 'accept').length;
-        this.setData({ subscriptionHint: accepted ? '本次已接受订阅；普通一次性消息每次授权对应一条提醒' : '未接受订阅，无法保证微信提醒' });
-      },
-      fail: () => this.setData({ subscriptionHint: '订阅未成功，请用手机微信打开后重试' }),
-      complete: () => this.setData({ subscriptionBusy: false })
-    });
-  },
-
-  onEditUserWebhookInput(e) {
-    this.setData({ editUserWebhookUrl: (e.detail.value || '').trim() });
   },
 
   async submitEditUser() {
     if (!checkIsAdmin(this.data.currentUser)) {
       return wx.showToast({ title: '仅限管理员操作', icon: 'none' });
     }
-    const { editingUser, editUserName, editUserPhone, editUserRole, editUserCities, editUserGroupId, editUserIsTest } = this.data;
+    const { editingUser, editUserName, editUserPhone, editUserRole, editUserCities, editUserIsTest } = this.data;
     if (!editingUser) return;
 
     const name = (editUserName || '').trim();
@@ -1021,16 +1059,12 @@ Page({
 
     try {
       const finalRole = editingUser.role === 'admin' ? 'admin' : editUserRole;
-      const isWorker = finalRole === 'worker';
-
       const updateData = {
         name: name,
         phone: phone,
         role: finalRole,
         cities: editUserCities,
-        groupId: isWorker ? (editUserGroupId || '').trim() : '',
-        isTest: Boolean(editUserIsTest),
-        webhookUrl: (this.data.editUserWebhookUrl || '').trim()
+        isTest: Boolean(editUserIsTest)
       };
 
       const res = await wx.cloud.callFunction({

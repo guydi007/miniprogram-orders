@@ -72,10 +72,6 @@
       <text class="info-label">主派师傅：</text>
       <text class="info-val highlight">{{ order.workerName || '未指派' }}</text>
     </view>
-    <view class="info-row" wx:if="{{ order.workerGroupId }}">
-      <text class="info-label">师傅群号：</text>
-      <text class="info-val">{{ order.workerGroupId }}</text>
-    </view>
     <view class="info-row" wx:if="{{ order.companionWorkers }}">
       <text class="info-label">同行人员：</text>
       <text class="info-val">{{ order.companionWorkers }}</text>
@@ -409,6 +405,10 @@
       </view>
 
       <view class="field-item mt-20">
+        <view wx:if="{{ order.settleType }}">
+          <text class="field-label required">金额修正原因：</text>
+          <textarea class="modal-textarea" placeholder="修改金额或支付渠道时必填" value="{{ correctionReason }}" bindinput="onCorrectionReasonInput" />
+        </view>
         <text class="field-label">施工/修改备注说明：</text>
         <textarea class="modal-textarea" placeholder="更换明细、费用调整原因等..." value="{{ modalNote }}" bindinput="onModalNoteInput" />
       </view>
@@ -475,6 +475,10 @@
       </view>
 
       <view class="field-item mt-20">
+        <view wx:if="{{ order.settleType }}">
+          <text class="field-label required">金额修正原因：</text>
+          <textarea class="modal-textarea" placeholder="修改金额或支付渠道时必填" value="{{ correctionReason }}" bindinput="onCorrectionReasonInput" />
+        </view>
         <text class="field-label">约定说明与修改备注：</text>
         <textarea class="modal-textarea" placeholder="约定上门安装时间、尾款结算方式说明等..." value="{{ modalNote }}" bindinput="onModalNoteInput" />
       </view>

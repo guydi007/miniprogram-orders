@@ -800,3 +800,31 @@
   .btn-disabled {
     opacity: 0.5;
   }
+
+  .group-type-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 5rpx 14rpx;
+    border-radius: 999rpx;
+    font-size: 20rpx;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .group-type-entry { color: #0369a1; background: #e0f2fe; }
+  .group-type-deal { color: #15803d; background: #dcfce7; }
+  .group-type-unconverted { color: #b45309; background: #fff7ed; border: 1rpx solid #fed7aa; }
+  .group-city-picker { width: 100%; }
+  .group-city-picker-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 76rpx;
+    padding: 0 22rpx;
+    border: 1rpx solid #dbe3ec;
+    border-radius: 12rpx;
+    background: #f8fafc;
+    color: #1e293b;
+    font-size: 28rpx;
+    box-sizing: border-box;
+  }
+  .group-city-arrow { color: #64748b; font-size: 34rpx; }

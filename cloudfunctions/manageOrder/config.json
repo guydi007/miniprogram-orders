@@ -3,5 +3,12 @@
     "openapi": [
       "subscribeMessage.send"
     ]
-  }
+  },
+  "triggers": [
+    {
+      "name": "notificationRetryEveryMinute",
+      "type": "timer",
+      "config": "*/1 * * * * * *"
+    }
+  ]
 }
