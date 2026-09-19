@@ -217,22 +217,29 @@
     </view>
   </view>
 
-  <!-- 8. 手机号核验弹窗 -->
+  <!-- 8. 统一员工登录弹窗：账号类型由后台自动判断 -->
   <view class="modal-mask" wx:if="{{ showPhoneModal }}">
     <view class="modal-box">
-      <view class="modal-title">🔐 员工身份核验</view>
-      <view class="modal-desc">请输入预留的手机号，系统将自动核验您的身份并进入系统：</view>
-      
-      <input 
-        class="modal-input" 
-        type="number" 
-        maxlength="11" 
-        placeholder="请输入您的11位手机号" 
-        value="{{ inputPhone }}" 
-        bindinput="onPhoneInput" 
-      />
+      <view class="modal-title">🔐 员工身份登录</view>
+      <view class="modal-desc">{{ loginHint }}</view>
 
-      <button class="btn-primary mt-30" bindtap="verifyAndBindPhone">核验登录</button>
+      <block wx:if="{{ loginStage === 'phone' }}">
+        <input
+          class="modal-input"
+          type="number"
+          maxlength="11"
+          placeholder="请输入员工11位手机号"
+          value="{{ inputPhone }}"
+          bindinput="onPhoneInput"
+        />
+        <button class="btn-primary mt-30" bindtap="verifyAndBindPhone" loading="{{ isSubmittingPhone }}" disabled="{{ isSubmittingPhone }}">登录</button>
+      </block>
+
+      <block wx:elif="{{ loginStage === 'wechat' }}">
+        <view class="modal-desc mt-16">员工手机号：{{ pendingLoginPhone }}</view>
+        <button class="btn-primary mt-30" open-type="getPhoneNumber" bindgetphonenumber="verifyAndBindWechatPhone" loading="{{ isSubmittingPhone }}" disabled="{{ isSubmittingPhone }}">授权微信手机号并登录</button>
+        <button class="btn-secondary mt-16" bindtap="resetLoginFlow" disabled="{{ isSubmittingPhone }}">返回修改手机号</button>
+      </block>
     </view>
   </view>
 

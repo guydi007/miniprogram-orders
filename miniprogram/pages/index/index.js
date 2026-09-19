@@ -1,5 +1,24 @@
 const app = getApp();
 
+// 工单日期筛选统一按北京时间（UTC+8），与录单快捷日期和财务统计保持一致。
+const BUSINESS_TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
+function businessDateParts(offsetDays = 0) {
+  const shifted = new Date(Date.now() + BUSINESS_TZ_OFFSET_MS + offsetDays * 86400000);
+  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate(), weekday: shifted.getUTCDay() || 7 };
+}
+function businessDateString(offsetDays = 0) {
+  const p = businessDateParts(offsetDays);
+  return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
+}
+function businessWeekRange() {
+  const p = businessDateParts(0);
+  const todayUtc = Date.UTC(p.year, p.month - 1, p.day);
+  const monday = new Date(todayUtc - (p.weekday - 1) * 86400000);
+  const sunday = new Date(todayUtc + (7 - p.weekday) * 86400000);
+  const fmt = d => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  return { start: fmt(monday), end: fmt(sunday) };
+}
+
 function checkIsAdmin(user) {
   return Boolean(user && user.role === 'admin');
 }
@@ -48,6 +67,9 @@ Page({
     showPhoneModal: false,
     inputPhone: '',
     isSubmittingPhone: false,
+    loginStage: 'phone',
+    pendingLoginPhone: '',
+    loginHint: '请输入员工手机号，系统会自动识别账号类型',
 
     showUserManageModal: false,
     userManageTab: 'list',
@@ -93,18 +115,24 @@ Page({
     this.fetchCities().finally(() => {
       if (app.globalData && app.globalData.currentUser) {
         this.handleUserLoaded(app.globalData.currentUser);
-      } else {
-        app.authReadyCallback = (user) => {
-          if (user && user.phone) {
-            this.handleUserLoaded(user);
-          } else {
-            this.setData({ showPhoneModal: true });
-          }
-        };
-        if (!app.authReadyCallback) {
-          this.setData({ showPhoneModal: true });
-        }
+        return;
       }
+
+      // App 认证若已经结束且没有用户，必须立即弹登录框；不能再等待一个不会到来的 callback。
+      if (app.globalData && app.globalData.authVerified) {
+        this.openLoginModal();
+        return;
+      }
+
+      // App 认证仍在进行时再注册回调，避免启动时序造成未登录却不弹登录框。
+      app.authReadyCallback = (user) => {
+        app.authReadyCallback = null;
+        if (user && user.phone) {
+          this.handleUserLoaded(user);
+        } else {
+          this.openLoginModal();
+        }
+      };
     });
   },
 
@@ -234,11 +262,19 @@ Page({
     if (Array.isArray(worker.cities)) workerCities = worker.cities;
     else if (worker.cities && typeof worker.cities === 'object') workerCities = Object.values(worker.cities);
     else if (typeof worker.cities === 'string') workerCities = [worker.cities];
+    workerCities = [...new Set(workerCities.map(city => String(city || '').trim()).filter(Boolean))];
 
-    if (workerCities.length > 0 && orderCities.length > 0) {
-      const hasMismatch = orderCities.some(orderCity => {
-        return !workerCities.some(wc => wc && (wc.includes(orderCity) || orderCity.includes(wc)));
+    // 与云端 canServeCity() 保持一致：普通接单人员必须明确配置城市，且按城市名精确匹配。
+    if (orderCities.length > 0 && workerCities.length === 0) {
+      return wx.showModal({
+        title: '无法派单',
+        content: `所选人员【${worker.name}】尚未配置管辖城市，请先由管理员完善员工城市权限。`,
+        showCancel: false
       });
+    }
+
+    if (orderCities.length > 0) {
+      const hasMismatch = orderCities.some(orderCity => !workerCities.includes(orderCity));
       if (hasMismatch) {
         return wx.showModal({
           title: '❌ 派单城市冲突',
@@ -251,11 +287,23 @@ Page({
     wx.showLoading({ title: `正在批量派单 (${orderIds.length}单)...` });
 
     const updateData = {
+      workerId: worker._id || '',
       workerName: worker.name,
       workerPhone: worker.phone || '',
       workerGroupId: '',
       status: '已派单'
     };
+
+    // 批量派单必须把每一单当前看到的 version 一并交给云端做乐观锁校验。
+    const orderVersions = {};
+    selectedOrders.forEach(order => {
+      orderVersions[order._id] = Number(order.version || 0);
+    });
+    if (Object.keys(orderVersions).length !== orderIds.length) {
+      wx.hideLoading();
+      await this.fetchOrders();
+      return wx.showToast({ title: '订单列表已变化，请重新勾选', icon: 'none' });
+    }
 
     try {
       const res = await wx.cloud.callFunction({
@@ -263,20 +311,45 @@ Page({
         data: {
           action: 'batchAssignWorker',
           orderIds: orderIds,
-          data: updateData
+          data: { ...updateData, orderVersions }
         }
       });
 
       wx.hideLoading();
       const result = res.result || {};
       if (result.success) {
-        wx.showToast({ title: `成功派单 ${orderIds.length} 单`, icon: 'success' });
+        const requested = Number.isFinite(Number(result.requested)) ? Number(result.requested) : orderIds.length;
+        const updated = Number.isFinite(Number(result.updated)) ? Number(result.updated) : 0;
+        const skipped = Number.isFinite(Number(result.skipped))
+          ? Number(result.skipped)
+          : Math.max(0, requested - updated);
+
         this.setData({
           isBatchMode: false,
           selectedOrderMap: {},
           selectedOrderIds: []
         });
-        this.fetchOrders();
+
+        // 无论全部成功还是部分成功，都重新从云端拉取，避免继续显示操作前的旧状态。
+        await this.fetchOrders();
+
+        if (updated === requested && skipped === 0) {
+          wx.showToast({ title: `成功派单 ${updated} 单`, icon: 'success' });
+        } else if (updated > 0) {
+          wx.showModal({
+            title: '部分派单成功',
+            content: `共选择 ${requested} 单，成功派单 ${updated} 单，${skipped} 单因状态已变化未处理。列表已刷新，请确认后再操作。`,
+            showCancel: false,
+            confirmText: '我知道了'
+          });
+        } else {
+          wx.showModal({
+            title: '未完成派单',
+            content: `所选 ${requested} 单均未更新，可能已被其他人员处理。列表已刷新，请重新确认。`,
+            showCancel: false,
+            confirmText: '我知道了'
+          });
+        }
       } else {
         wx.showToast({ title: result.msg || '批量派单失败，请重试', icon: 'none' });
       }
@@ -326,16 +399,12 @@ Page({
   },
 
   fetchCities() {
-    const db = wx.cloud.database();
-    return db.collection('cities')
-      .where({ enabled: true })
-      .orderBy('sort', 'asc')
-      .get()
+    return wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getCities' } })
       .then(res => {
-        let list = (res.data || []).map(item => item.name);
-        if (!list || list.length === 0) {
-          list = ['天津', '北京'];
-        }
+        const result = res.result || {};
+        if (!result.success) throw new Error(result.msg || 'CITIES_UNAVAILABLE');
+        let list = (result.cities || []).map(item => typeof item === 'string' ? item : item.name).filter(Boolean);
+        if (!list.length) list = wx.getStorageSync('availableCities') || ['天津', '北京'];
         if (app.globalData) app.globalData.availableCities = list;
         wx.setStorageSync('availableCities', list);
 
@@ -344,21 +413,17 @@ Page({
           availableCities: list,
           newUserCities: [defaultCity],
           newUserCitiesMap: { [defaultCity]: true }
-        }, () => {
-          this.updateUserVisibleCities();
-        });
+        }, () => this.updateUserVisibleCities());
       })
       .catch(err => {
-        console.warn('拉取城市失败，使用兜底配置：', err);
-        const fallback = ['天津', '北京'];
+        console.warn('拉取城市失败，使用缓存配置：', err);
+        const fallback = wx.getStorageSync('availableCities') || ['天津', '北京'];
         if (app.globalData) app.globalData.availableCities = fallback;
         this.setData({
           availableCities: fallback,
-          newUserCities: ['天津'],
-          newUserCitiesMap: { '天津': true }
-        }, () => {
-          this.updateUserVisibleCities();
-        });
+          newUserCities: fallback.length ? [fallback[0]] : [],
+          newUserCitiesMap: fallback.length ? { [fallback[0]]: true } : {}
+        }, () => this.updateUserVisibleCities());
       });
   },
 
@@ -367,15 +432,25 @@ Page({
     const all = this.data.availableCities;
     if (!user) return;
 
+    let visible = [];
     if (checkIsAdmin(user)) {
-      this.setData({ userVisibleCities: all });
+      visible = all;
     } else if (user.role === 'service' || user.role === 'leader') {
-      const myCities = Array.isArray(user.cities) ? user.cities : [];
-      const visible = all.filter(c => myCities.includes(c));
-      this.setData({ userVisibleCities: visible.length > 0 ? visible : all });
-    } else {
-      this.setData({ userVisibleCities: [] });
+      const myCities = Array.isArray(user.cities)
+        ? user.cities.map(city => String(city || '').trim()).filter(Boolean)
+        : [];
+      // 与云端权限保持一致：cities=[] 代表没有城市权限，不能再回退为“全部城市”。
+      visible = all.filter(city => myCities.includes(city));
     }
+
+    const nextFilter = this.data.selectedCityFilter !== 'all' && !visible.includes(this.data.selectedCityFilter)
+      ? 'all'
+      : this.data.selectedCityFilter;
+
+    this.setData({
+      userVisibleCities: visible,
+      selectedCityFilter: nextFilter
+    });
   },
 
   handleUserLoaded(user) {
@@ -407,7 +482,7 @@ Page({
   async handleUserHeaderTap() {
     const user = this.data.currentUser;
     if (!user) {
-      this.setData({ showPhoneModal: true, inputPhone: '' });
+      this.openLoginModal();
       return;
     }
 
@@ -420,9 +495,9 @@ Page({
 
       if (dbUser.isTest === true || checkIsAdmin(dbUser)) {
         wx.showModal({
-          title: '退出 / 更换账号',
-          content: `当前为【${dbUser.name}】${dbUser.isTest ? '（测试免锁账号）' : ''}，确定退出并登录其他账号吗？`,
-          confirmText: '退出换号',
+          title: '退出当前账号',
+          content: `当前为【${dbUser.name}】${dbUser.isTest ? '（测试账号）' : ''}。退出后可重新登录其他可用账号。`,
+          confirmText: '退出登录',
           confirmColor: '#e53935',
           success: (mRes) => {
             if (mRes.confirm) {
@@ -432,17 +507,15 @@ Page({
                 currentUser: null,
                 orders: [],
                 filteredOrders: [],
-                isBatchMode: false,
-                showPhoneModal: true,
-                inputPhone: ''
-              });
+                isBatchMode: false
+              }, () => this.openLoginModal());
             }
           }
         });
         return;
       }
 
-      const hasBoundOpenid = dbUser.openid && dbUser.openid.trim() !== '';
+      const hasBoundOpenid = Boolean(dbUser.openid);
       if (hasBoundOpenid) {
         return wx.showModal({
           title: '身份已绑定锁定',
@@ -452,11 +525,31 @@ Page({
         });
       }
 
-      this.setData({ showPhoneModal: true, inputPhone: '' });
+      this.openLoginModal();
     } catch (e) {
       wx.hideLoading();
-      this.setData({ showPhoneModal: true, inputPhone: '' });
+      this.openLoginModal();
     }
+  },
+
+  openLoginModal() {
+    this.setData({
+      showPhoneModal: true,
+      inputPhone: '',
+      isSubmittingPhone: false,
+      loginStage: 'phone',
+      pendingLoginPhone: '',
+      loginHint: '请输入员工手机号，系统会自动识别账号类型'
+    });
+  },
+
+  resetLoginFlow() {
+    this.setData({
+      loginStage: 'phone',
+      pendingLoginPhone: '',
+      loginHint: '请输入员工手机号，系统会自动识别账号类型',
+      isSubmittingPhone: false
+    });
   },
 
   onPhoneInput(e) {
@@ -467,19 +560,19 @@ Page({
     if (this.data.isSubmittingPhone) return;
 
     const phone = (this.data.inputPhone || '').trim();
-    if (!phone || phone.length < 11) {
+    if (!/^1\d{10}$/.test(phone)) {
       return wx.showToast({ title: '请输入正确的11位手机号', icon: 'none' });
     }
 
     this.setData({ isSubmittingPhone: true });
-    wx.showLoading({ title: '核验登录中...' });
+    wx.showLoading({ title: '核验账号中...' });
 
     try {
       const res = await wx.cloud.callFunction({
         name: 'login',
         data: {
-          action: 'verifyAndBind',
-          phone: phone
+          action: 'beginLogin',
+          phone
         }
       });
 
@@ -489,22 +582,37 @@ Page({
 
       if (!result.success) {
         return wx.showModal({
-          title: '核验/绑定提示',
+          title: '登录提示',
           content: result.msg || '核验失败，请重试',
           showCancel: false
         });
       }
 
-      const user = result.user;
-      wx.setStorageSync('currentUser', user);
-      this.handleUserLoaded(user);
+      // 测试账号由后台识别后直接建立测试会话；前台无需用户选择账号类型。
+      if (result.nextStep === 'DONE' && result.user) {
+        const user = result.user;
+        wx.setStorageSync('currentUser', user);
+        this.handleUserLoaded(user);
+        return wx.showToast({ title: `欢迎回来，${user.name}`, icon: 'success' });
+      }
 
-      wx.showToast({
-        title: `欢迎回来，${user.name}`,
-        icon: 'success'
+      // 正式账号只有在后台判断后才进入微信手机号核验步骤。
+      if (result.nextStep === 'WECHAT_PHONE') {
+        return this.setData({
+          loginStage: 'wechat',
+          pendingLoginPhone: phone,
+          loginHint: result.msg || '请授权微信手机号完成身份核验'
+        });
+      }
+
+      wx.showModal({
+        title: '登录提示',
+        content: '登录状态异常，请重新输入手机号',
+        showCancel: false,
+        success: () => this.resetLoginFlow()
       });
     } catch (err) {
-      console.error('云函数核验异常：', err);
+      console.error('员工账号核验异常：', err);
       wx.hideLoading();
       this.setData({ isSubmittingPhone: false });
       wx.showToast({ title: '网络异常，请重试', icon: 'none' });
@@ -552,7 +660,7 @@ Page({
       list = list.filter(o => o.city === selectedCityFilter);
     }
 
-    const parseOrderDateStr = (text, defaultYear = new Date().getFullYear()) => {
+    const parseOrderDateStr = (text, defaultYear = businessDateParts().year) => {
       if (!text) return '';
       const str = String(text).trim();
 
@@ -582,14 +690,11 @@ Page({
     };
 
     if (timeFilterType !== 'all') {
-      const now = new Date();
-      const currentYear = now.getFullYear();
-      
-      const todayStr = `${currentYear}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      
-      const tomorrow = new Date(now);
-      tomorrow.setDate(now.getDate() + 1);
-      const tomorrowStr = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
+      const businessToday = businessDateParts(0);
+      const currentYear = businessToday.year;
+      const todayStr = businessDateString(0);
+      const tomorrowStr = businessDateString(1);
+      const weekRange = businessWeekRange();
 
       list = list.filter(o => {
         const tField = (o.appointmentTime || '').trim();
@@ -598,24 +703,13 @@ Page({
         const orderDateFormatted = parseOrderDateStr(tField, currentYear);
         if (!orderDateFormatted) return false;
 
-        // 仅精准展示“今日”预约工单，不再并入历史过期的待派单
+        // 所有“今日/明日/本周”统一按北京时间的业务日期字符串比较，避免设备时区干扰。
         if (timeFilterType === 'today') {
           return orderDateFormatted === todayStr;
         } else if (timeFilterType === 'tomorrow') {
           return orderDateFormatted === tomorrowStr;
         } else if (timeFilterType === 'week') {
-          const d = new Date(orderDateFormatted.replace(/-/g, '/') + ' 12:00:00');
-          const day = now.getDay() || 7;
-          
-          const monday = new Date(now);
-          monday.setDate(now.getDate() - day + 1);
-          monday.setHours(0, 0, 0, 0);
-          
-          const sunday = new Date(monday);
-          sunday.setDate(monday.getDate() + 6);
-          sunday.setHours(23, 59, 59, 999);
-          
-          return d >= monday && d <= sunday;
+          return orderDateFormatted >= weekRange.start && orderDateFormatted <= weekRange.end;
         } else if (timeFilterType === 'custom' && customDateValue) {
           return orderDateFormatted === customDateValue;
         }
@@ -682,8 +776,9 @@ Page({
   
   goToCreate() {
     if (this._isNavigating) return;
-    if (this.data.currentUser && this.data.currentUser.role === 'admin') {
-      return wx.showToast({ title: '管理员无录单权限', icon: 'none' });
+    const user = this.data.currentUser;
+    if (!user || !['service', 'leader'].includes(user.role)) {
+      return wx.showToast({ title: '当前账号无录单权限', icon: 'none' });
     }
     this._isNavigating = true;
     wx.navigateTo({
@@ -724,6 +819,60 @@ Page({
     this.fetchAllUsers();
     this.fetchSources();
     this.fetchNotificationGroups();
+  },
+
+  async verifyAndBindWechatPhone(e) {
+    if (this.data.isSubmittingPhone) return;
+    if (this.data.loginStage !== 'wechat') {
+      return wx.showToast({ title: '请先输入员工手机号', icon: 'none' });
+    }
+
+    const phone = (this.data.pendingLoginPhone || this.data.inputPhone || '').trim();
+    if (!/^1\d{10}$/.test(phone)) {
+      this.resetLoginFlow();
+      return wx.showToast({ title: '登录手机号已失效，请重新输入', icon: 'none' });
+    }
+
+    const code = e && e.detail && e.detail.code;
+    if (!code) return wx.showToast({ title: '请允许微信手机号授权', icon: 'none' });
+
+    this.setData({ isSubmittingPhone: true });
+    wx.showLoading({ title: '核验登录中...' });
+    try {
+      const res = await wx.cloud.callFunction({
+        name: 'login',
+        data: {
+          action: 'verifyWechatPhone',
+          phone,
+          phoneCode: code
+        }
+      });
+      wx.hideLoading();
+      this.setData({ isSubmittingPhone: false });
+      const result = res.result || {};
+      if (!result.success) {
+        return wx.showModal({
+          title: '身份核验提示',
+          content: result.msg || '核验失败，请重试',
+          showCancel: false,
+          success: () => {
+            if (result.code === 'PHONE_MISMATCH' || result.code === 'ACCOUNT_TYPE_CHANGED') {
+              this.resetLoginFlow();
+            }
+          }
+        });
+      }
+
+      const user = result.user;
+      wx.setStorageSync('currentUser', user);
+      this.handleUserLoaded(user);
+      wx.showToast({ title: `欢迎回来，${user.name}`, icon: 'success' });
+    } catch (err) {
+      console.error('微信手机号核验异常：', err);
+      wx.hideLoading();
+      this.setData({ isSubmittingPhone: false });
+      wx.showToast({ title: '网络异常，请重试', icon: 'none' });
+    }
   },
 
   closeUserManageModal() {
@@ -839,9 +988,10 @@ Page({
   },
 
   fetchSources() {
-    const db = wx.cloud.database();
-    db.collection('order_sources').orderBy('sort', 'asc').get().then(res => {
-      this.setData({ allSourceList: res.data || [] });
+    wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getSources' } }).then(res => {
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'SOURCES_UNAVAILABLE');
+      this.setData({ allSourceList: result.sources || [] });
     }).catch(e => console.error('获取渠道列表失败：', e));
   },
 
@@ -944,7 +1094,7 @@ Page({
       return wx.showToast({ title: '禁止增加管理员权限', icon: 'none' });
     }
     if (!name) return wx.showToast({ title: '请输入姓名', icon: 'none' });
-    if (!phone || phone.length !== 11) return wx.showToast({ title: '请输入11位手机号', icon: 'none' });
+    if (!/^1\d{10}$/.test(phone)) return wx.showToast({ title: '请输入正确的11位手机号', icon: 'none' });
     if (!cities || cities.length === 0) return wx.showToast({ title: '请至少分配一个城市', icon: 'none' });
 
     wx.showLoading({ title: '正在录入...' });
@@ -1050,8 +1200,8 @@ Page({
     const phone = (editUserPhone || '').trim();
 
     if (!name) return wx.showToast({ title: '请输入姓名', icon: 'none' });
-    if (!phone || phone.length !== 11) return wx.showToast({ title: '请输入11位手机号', icon: 'none' });
-    if (!editUserCities || editUserCities.length === 0) {
+    if (!/^1\d{10}$/.test(phone)) return wx.showToast({ title: '请输入正确的11位手机号', icon: 'none' });
+    if (editingUser.role !== 'admin' && (!editUserCities || editUserCities.length === 0)) {
       return wx.showToast({ title: '请至少保留一个城市', icon: 'none' });
     }
 

@@ -67,12 +67,17 @@ function citiesOf(user) {
 async function recipients(db, type, order, operator) {
   let list;
   if (type === 'urgent') {
-    // 员工姓名不唯一，历史订单缺少手机号时宁可不投递，也不能按姓名错发。
-    if (!/^1\d{10}$/.test(String(order.workerPhone || ''))) return [];
-    const result = await db.collection('users').where({ phone: order.workerPhone }).limit(1).get();
-    list = (result.data || []).filter(user => ['worker', 'leader'].includes(user.role));
-    // 不根据同名员工猜收件人，避免错发客户资料。
-    if (list.length !== 1) return [];
+    // 新订单使用不可变 workerId 精确定位；历史数据缺少 workerId 时才按手机号兼容。
+    if (order.workerId) {
+      const result = await db.collection('users').doc(String(order.workerId)).get().catch(() => ({ data: null }));
+      list = result.data && ['worker', 'leader'].includes(result.data.role) ? [result.data] : [];
+    } else {
+      if (!/^1\d{10}$/.test(String(order.workerPhone || ''))) return [];
+      const result = await db.collection('users').where({ phone: order.workerPhone }).limit(2).get();
+      list = (result.data || []).filter(user => ['worker', 'leader'].includes(user.role));
+      // 历史手机号匹配必须唯一，绝不根据姓名猜收件人。
+      if (list.length !== 1) return [];
+    }
   } else {
     list = [];
     for (let skip = 0; ; skip += 100) {
@@ -125,67 +130,156 @@ function contentFor(type, order, operator) {
 
 const EVENT_GROUPS = { newOrder: 'order_entry', deal: 'deal', unconverted: 'unconverted' };
 
+function deliveryDocumentId(key) {
+  const raw = `${key.eventId}|${key.groupId}|${key.webhookFingerprint}`;
+  return 'delivery_' + crypto.createHash('sha256').update(raw).digest('hex').slice(0, 40);
+}
+
+async function claimNotificationDelivery(db, key, route) {
+  const collection = db.collection('notification_deliveries');
+  // 兼容历史随机 _id；新投递使用确定性文档 ID，不再依赖控制台唯一索引保证并发去重。
+  const legacy = await collection.where(key).limit(1).get().catch(() => ({ data: [] }));
+  const deliveryId = legacy.data && legacy.data[0] ? legacy.data[0]._id : deliveryDocumentId(key);
+  const transaction = await db.startTransaction();
+  try {
+    let existing = null;
+    try {
+      const result = await transaction.collection('notification_deliveries').doc(deliveryId).get();
+      existing = result.data || null;
+    } catch (error) {
+      existing = null;
+    }
+
+    if (existing && existing.status === 'ACCEPTED') {
+      await transaction.rollback().catch(() => null);
+      return { claimed: false, terminal: true, status: 'ACCEPTED', deliveryId, retryable: false };
+    }
+    if (existing && existing.status === 'PERMANENT_FAILED') {
+      await transaction.rollback().catch(() => null);
+      return { claimed: false, terminal: true, status: 'PERMANENT_FAILED', deliveryId, retryable: false };
+    }
+
+    const staleSending = existing && existing.status === 'SENDING' &&
+      Date.parse(existing.lastAttemptAt || 0) < Date.now() - 60000;
+    if (existing && existing.status === 'SENDING' && !staleSending) {
+      await transaction.rollback().catch(() => null);
+      return { claimed: false, status: 'SENDING', deliveryId, retryable: true };
+    }
+
+    const attempts = Number(existing && existing.attempts || 0) + 1;
+    const leaseToken = crypto.randomBytes(12).toString('hex');
+    const now = new Date().toISOString();
+    const claimData = {
+      ...key,
+      ...route,
+      status: 'SENDING',
+      attempts,
+      lastAttemptAt: now,
+      leaseToken
+    };
+    if (existing) {
+      await transaction.collection('notification_deliveries').doc(deliveryId).update({ data: claimData });
+    } else {
+      await transaction.collection('notification_deliveries').doc(deliveryId).set({ data: claimData });
+    }
+    await transaction.commit();
+    return { claimed: true, deliveryId, attempts, leaseToken, retryable: true };
+  } catch (error) {
+    try { await transaction.rollback(); } catch (rollbackError) { /* ignore */ }
+    // 同一确定性文档发生事务冲突，说明其他实例已取得发送权；本实例绝不再发送。
+    return { claimed: false, status: 'SENDING', deliveryId, retryable: true };
+  }
+}
+
 async function notifyConfiguredGroups(db, type, order, operator, send = postWebhook) {
   const groupType = EVENT_GROUPS[type] || type;
   const query = { city: order.city, groupType, enabled: true, isTestGroup: operator.isTest === true };
   const result = await db.collection('notification_groups').where(query).get();
   const groups = result.data || [];
   const unique = new Map();
-  groups.forEach(group => { if (group.webhookUrl && !unique.has(group.webhookFingerprint || webhookFingerprint(group.webhookUrl))) unique.set(group.webhookFingerprint || webhookFingerprint(group.webhookUrl), group); });
+  groups.forEach(group => {
+    const webhook = String(group.webhookUrl || '').trim();
+    if (webhook && !unique.has(group.webhookFingerprint || webhookFingerprint(webhook))) {
+      unique.set(group.webhookFingerprint || webhookFingerprint(webhook), group);
+    }
+  });
   const eventId = order.eventId || `evt_${order._id}_${type}_${String(order.paymentId || 'current')}`;
+
+  // 有匹配群配置但没有任何有效 Webhook 属于永久配置错误，绝不能把空 deliveries 的 every() 误判为 SENT。
+  if (groups.length > 0 && unique.size === 0) {
+    try {
+      await db.collection('notification_events').where({ eventId }).update({ data: {
+        status: 'PERMANENT_FAILED', errorCode: 'NO_VALID_WEBHOOK', nextRetryAt: '', updatedAt: new Date().toISOString()
+      } });
+    } catch (error) { /* 事件可能尚未创建 */ }
+    return { success: false, status: 'PERMANENT_FAILED', retryable: false, code: 'NO_VALID_WEBHOOK', deliveries: [] };
+  }
+
   const deliveries = await Promise.all([...unique.values()].map(async group => {
     const fingerprint = group.webhookFingerprint || webhookFingerprint(group.webhookUrl);
-    // 仅记录路由元数据和指纹，便于核对城市/群类型，不保存机器人密钥。
-    const route = { orderCity: String(order.city || '').trim(), configuredCity: String(group.city || '').trim(), groupName: String(group.groupName || '').trim(), groupType: group.groupType, isTestEvent: operator.isTest === true, isTestGroup: group.isTestGroup === true };
+    const route = {
+      orderCity: String(order.city || '').trim(), configuredCity: String(group.city || '').trim(),
+      groupName: String(group.groupName || '').trim(), groupType: group.groupType,
+      isTestEvent: operator.isTest === true, isTestGroup: group.isTestGroup === true
+    };
     const key = { eventId, groupId: group._id, webhookFingerprint: fingerprint };
-    const collection = db.collection('notification_deliveries');
-    const existingResult = await collection.where(key).limit(1).get();
-    let existing = existingResult.data && existingResult.data[0];
-    if (existing && existing.status === 'ACCEPTED') return { groupId: group._id, status: 'ACCEPTED', webhookFingerprint: fingerprint, ...route, retryable: false };
-    if (existing && existing.status === 'PERMANENT_FAILED') return { groupId: group._id, status: 'PERMANENT_FAILED', webhookFingerprint: fingerprint, ...route, retryable: false };
-
-    const now = new Date().toISOString();
-    const staleSending = existing && existing.status === 'SENDING' && Date.parse(existing.lastAttemptAt || 0) < Date.now() - 60000;
-    if (existing && existing.status === 'SENDING' && !staleSending) {
-      // 另一实例正在发送；保留重试资格，等待它完成或发送租约过期。
-      return { groupId: group._id, status: 'SENDING', webhookFingerprint: fingerprint, ...route, retryable: true };
+    const claim = await claimNotificationDelivery(db, key, route);
+    if (!claim.claimed) {
+      return { groupId: group._id, status: claim.status || 'SENDING', webhookFingerprint: fingerprint, ...route, retryable: claim.retryable !== false };
     }
 
-    let deliveryId;
-    let attempts;
-    if (existing) {
-      attempts = Number(existing.attempts || 0) + 1;
-      const claim = await collection.where({ _id: existing._id, status: existing.status }).update({ data: { ...route, status: 'SENDING', attempts, lastAttemptAt: now } });
-      if (!claim.stats || claim.stats.updated !== 1) return { groupId: group._id, status: 'SENDING', webhookFingerprint: fingerprint, ...route, retryable: true };
-      deliveryId = existing._id;
-    } else {
-      attempts = 1;
-      try {
-        const created = await collection.add({ data: { ...key, ...route, status: 'SENDING', attempts, lastAttemptAt: now } });
-        deliveryId = created._id;
-      } catch (error) {
-        // 唯一索引冲突意味着其他实例已创建同一投递；本实例不再重复发送。
-        return { groupId: group._id, status: 'SENDING', webhookFingerprint: fingerprint, ...route, retryable: true };
-      }
-    }
     try {
       const message = { msgtype: 'text', text: { content: contentFor(type, order, operator) } };
       if (/^1\d{10}$/.test(group.phone || '')) message.text.mentioned_mobile_list = [group.phone];
       await send(group.webhookUrl, message);
-      await collection.doc(deliveryId).update({ data: { status: 'ACCEPTED', acceptedAt: new Date().toISOString(), errorCode: '' } });
+      const accepted = await db.collection('notification_deliveries').where({
+        _id: claim.deliveryId, leaseToken: claim.leaseToken, status: 'SENDING'
+      }).update({ data: {
+        status: 'ACCEPTED', acceptedAt: new Date().toISOString(), errorCode: '', leaseToken: ''
+      } });
+      // 正常 webhook 请求最多 3 秒；若租约已被替换则保守返回 SENDING，避免旧实例覆盖新实例状态。
+      if (!accepted.stats || accepted.stats.updated !== 1) {
+        return { groupId: group._id, status: 'SENDING', webhookFingerprint: fingerprint, ...route, retryable: true };
+      }
       return { groupId: group._id, status: 'ACCEPTED', webhookFingerprint: fingerprint, ...route, retryable: false };
     } catch (error) {
       const retryable = !String(error.message || '').includes('机器人拒绝消息');
-      await collection.doc(deliveryId).update({ data: { status: retryable ? 'RETRYABLE' : 'PERMANENT_FAILED', errorCode: retryable ? 'SEND_FAILED' : 'WEBHOOK_REJECTED', nextRetryAt: retryable ? new Date(Date.now() + 60000).toISOString() : '' } });
-      return { groupId: group._id, status: retryable ? 'RETRYABLE' : 'PERMANENT_FAILED', webhookFingerprint: fingerprint, errorCode: retryable ? 'SEND_FAILED' : 'WEBHOOK_REJECTED', ...route, retryable };
+      await db.collection('notification_deliveries').where({
+        _id: claim.deliveryId, leaseToken: claim.leaseToken, status: 'SENDING'
+      }).update({ data: {
+        status: retryable ? 'RETRYABLE' : 'PERMANENT_FAILED',
+        errorCode: retryable ? 'SEND_FAILED' : 'WEBHOOK_REJECTED',
+        nextRetryAt: retryable ? new Date(Date.now() + 60000).toISOString() : '',
+        leaseToken: ''
+      } });
+      return {
+        groupId: group._id, status: retryable ? 'RETRYABLE' : 'PERMANENT_FAILED',
+        webhookFingerprint: fingerprint, errorCode: retryable ? 'SEND_FAILED' : 'WEBHOOK_REJECTED',
+        ...route, retryable
+      };
     }
   }));
-  const status = !groups.length ? 'FAILED' : deliveries.every(item => item.status === 'ACCEPTED') ? 'SENT' : deliveries.some(item => item.status === 'ACCEPTED') ? 'PARTIAL' : 'FAILED';
+
+  const status = !groups.length
+    ? 'FAILED'
+    : deliveries.length > 0 && deliveries.every(item => item.status === 'ACCEPTED')
+      ? 'SENT'
+      : deliveries.some(item => item.status === 'ACCEPTED') ? 'PARTIAL' : 'FAILED';
   const retryable = !groups.length || deliveries.some(item => item.retryable);
-  // 没有任何可重试投递时，事件进入终态，避免 nextRetryAt 为空字符串被重试查询反复命中。
   const eventStatus = !retryable && status !== 'SENT' ? 'PERMANENT_FAILED' : status;
-  try { await db.collection('notification_events').where({ eventId }).update({ data: { status: eventStatus, updatedAt: new Date().toISOString(), retryCount: status === 'FAILED' || status === 'PARTIAL' ? 1 : 0, nextRetryAt: retryable ? new Date(Date.now() + 60000).toISOString() : '' } }); } catch (error) { /* 事件可能尚未由业务动作创建 */ }
-  return { success: status === 'SENT', status: eventStatus, retryable, code: groups.length ? undefined : (operator.isTest ? 'NO_TEST_GROUP_CONFIGURED' : 'NO_GROUP_CONFIGURED'), deliveries };
+  try {
+    await db.collection('notification_events').where({ eventId }).update({ data: {
+      status: eventStatus,
+      updatedAt: new Date().toISOString(),
+      retryCount: status === 'FAILED' || status === 'PARTIAL' ? 1 : 0,
+      nextRetryAt: retryable ? new Date(Date.now() + 60000).toISOString() : ''
+    } });
+  } catch (error) { /* 事件可能尚未由业务动作创建 */ }
+  return {
+    success: status === 'SENT', status: eventStatus, retryable,
+    code: groups.length ? undefined : (operator.isTest ? 'NO_TEST_GROUP_CONFIGURED' : 'NO_GROUP_CONFIGURED'),
+    deliveries
+  };
 }
 
 async function notifyGroup(db, type, order, operator, send = postWebhook, suppliedUsers) {

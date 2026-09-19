@@ -1,34 +1,34 @@
 const app = getApp();
 
+const BUSINESS_TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
+
 function formatDateTime(dateVal) {
   if (!dateVal) return '';
   const d = new Date(dateVal);
   if (isNaN(d.getTime())) return String(dateVal);
-
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const h = String(d.getHours()).padStart(2, '0');
-  const min = String(d.getMinutes()).padStart(2, '0');
+  // 所有业务时间固定按北京时间（UTC+8）展示，不跟随手机所在时区变化。
+  const shifted = new Date(d.getTime() + BUSINESS_TZ_OFFSET_MS);
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(shifted.getUTCDate()).padStart(2, '0');
+  const h = String(shifted.getUTCHours()).padStart(2, '0');
+  const min = String(shifted.getUTCMinutes()).padStart(2, '0');
   return `${y}-${m}-${day} ${h}:${min}`;
+}
+
+function businessDateString(offsetDays = 0) {
+  const shifted = new Date(Date.now() + BUSINESS_TZ_OFFSET_MS + offsetDays * 86400000);
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function parseDateSmart(text) {
   if (!text) return '';
-  let str = text.trim();
-
-  const now = new Date();
-  const getFormat = (offsetDays) => {
-    const d = new Date(now.getTime() + offsetDays * 86400000);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  };
-
-  const today = getFormat(0);
-  const tomorrow = getFormat(1);
-
+  let str = String(text).trim();
+  const today = businessDateString(0);
+  const tomorrow = businessDateString(1);
   str = str.replace(/(今天|当天|今日)\s*/g, `${today} `);
   str = str.replace(/(明天|次日)\s*/g, `${tomorrow} `);
   return str.replace(/\s+/g, ' ').trim();
@@ -72,11 +72,14 @@ Page({
     remainTotal: 0,
     existingPrepayPaid: 0,
     existingPrepayChannels: { cash: 0, wechat: 0, alipay: 0 },
+    prepayAdjustmentMode: 'add', // add=追加收款；correct=修正累计金额/支付渠道
 
     modalCompanions: '',
     modalNote: '',
     correctionReason: '',
     localPhotos: [],
+    pendingPaymentCloudIds: [],
+    paymentRetryLocked: false,
 
     showFeedbackModal: false,
     feedbackContent: '',
@@ -88,9 +91,12 @@ Page({
     const isLeader = role === 'leader';
     const isServiceOrLeader = role === 'admin' || role === 'service' || role === 'leader';
     const isWorkerOrLeader = role === 'worker' || role === 'leader';
-    const canOperateSettle = isLeader || (role === 'worker' && order && user && user.phone && order.workerPhone === user.phone);
+    const isAssignedWorker = Boolean(role === 'worker' && order && user && (
+      order.workerId ? String(order.workerId) === String(user._id) : (user.phone && order.workerPhone === user.phone)
+    ));
+    const canOperateSettle = isLeader || isAssignedWorker;
     const canEditAppointment = Boolean(order && !['已完工', '未成单'].includes(order.status) &&
-      (role === 'service' || isLeader || (role === 'worker' && user && user.phone && order.workerPhone === user.phone)));
+      (role === 'service' || isLeader || isAssignedWorker));
 
     this.setData({
       currentUser: user,
@@ -151,10 +157,21 @@ Page({
         order.failTimeFormatted = formatDateTime(order.failTime);
       }
       if (Array.isArray(order.paymentLogs)) {
-        order.paymentLogs = order.paymentLogs.map(item => ({
-          ...item,
-          timeFormatted: formatDateTime(item.time)
-        }));
+        order.paymentLogs = order.paymentLogs.map(item => {
+          const paidAfter = Number(item.paidAfter !== undefined ? item.paidAfter : item.currentPaid || 0);
+          const amountThisTime = Number(item.amountThisTime !== undefined ? item.amountThisTime : item.currentPaid || 0);
+          const operationType = String(item.operationType || '');
+          const isLegacyCorrection = !operationType && item.amountThisTime !== undefined && Number(item.amountThisTime || 0) === 0 && item.paidBefore !== undefined && item.paidAfter !== undefined;
+          const isCorrection = operationType === 'amount_correction' || isLegacyCorrection;
+          return {
+            ...item,
+            paidAfter,
+            amountThisTime,
+            isCorrection,
+            operationLabel: isCorrection ? '金额/渠道修正' : (operationType === 'deposit_payment' ? '首次预付' : (operationType === 'additional_payment' ? '追加收款' : (operationType === 'final_payment' ? '尾款结清' : (operationType === 'full_payment' ? '全款收款' : '支付记录')))),
+            timeFormatted: formatDateTime(item.time)
+          };
+        });
       }
       if (Array.isArray(order.feedbacks)) {
         order.feedbacks = order.feedbacks.map(item => ({
@@ -191,6 +208,180 @@ Page({
     return this._detailPromise;
   },
 
+  async handleOrderMutationFailure(result, fallbackMessage) {
+    const payload = result || {};
+    const refreshCodes = new Set([
+      'ORDER_VERSION_CONFLICT',
+      'INVALID_ORDER_VERSION',
+      'ORDER_STATE_CHANGED',
+      'ORDER_ARCHIVED'
+    ]);
+
+    if (refreshCodes.has(payload.code)) {
+      await new Promise(resolve => wx.showModal({
+        title: '工单状态已更新',
+        content: payload.msg || '该工单已被其他操作更新，请刷新后重试。',
+        showCancel: false,
+        success: () => resolve(),
+        fail: () => resolve()
+      }));
+      await this.fetchOrderDetail(this.data.orderId);
+      return true;
+    }
+
+    wx.showToast({ title: payload.msg || fallbackMessage || '操作失败，请重试', icon: 'none' });
+    return false;
+  },
+
+  paymentPendingStorageKey() {
+    return `pendingPayment:${this.data.orderId || ''}`;
+  },
+
+  buildPaymentPendingSnapshot(operationId, cloudFileIDs) {
+    const keys = [
+      'settleMode', 'prepayAdjustmentMode', 'inputCash', 'inputWechat', 'inputAlipay', 'inputTotalAmount',
+      'modalCompanions', 'modalNote', 'correctionReason', 'existingPrepayPaid', 'existingPrepayChannels',
+      'initialSnapshot', 'fullTotal', 'depositTotal', 'remainTotal'
+    ];
+    const form = {};
+    keys.forEach(key => { form[key] = this.data[key]; });
+    return {
+      orderId: this.data.orderId,
+      operationId,
+      cloudFileIDs: Array.isArray(cloudFileIDs) ? [...new Set(cloudFileIDs.filter(Boolean))] : [],
+      form,
+      savedAt: Date.now()
+    };
+  },
+
+  savePendingPaymentOperation(operationId, cloudFileIDs) {
+    if (!operationId || !this.data.orderId) return;
+    const payload = this.buildPaymentPendingSnapshot(operationId, cloudFileIDs);
+    wx.setStorageSync(this.paymentPendingStorageKey(), payload);
+    this._paymentOperationId = operationId;
+    this._paymentUploadedCloudIds = payload.cloudFileIDs;
+    this._paymentOutcomeUnknown = true;
+  },
+
+  clearPendingPaymentOperation() {
+    try { wx.removeStorageSync(this.paymentPendingStorageKey()); } catch (e) { /* ignore */ }
+    this._paymentOperationId = null;
+    this._paymentUploadedCloudIds = [];
+    this._paymentOutcomeUnknown = false;
+    this.setData({ pendingPaymentCloudIds: [], paymentRetryLocked: false });
+  },
+
+  async getPaymentOperationStatus(operationId) {
+    const res = await wx.cloud.callFunction({
+      name: 'manageOrder',
+      data: {
+        action: 'getPaymentOperationStatus',
+        orderId: this.data.orderId,
+        data: { operationId }
+      }
+    });
+    const result = res.result || {};
+    if (!result.success) throw new Error(result.msg || 'PAYMENT_STATUS_CHECK_FAILED');
+    return result;
+  },
+
+  async restorePendingPaymentIfNeeded() {
+    const pending = wx.getStorageSync(this.paymentPendingStorageKey());
+    if (!pending || String(pending.orderId || '') !== String(this.data.orderId || '') || !pending.operationId) return false;
+    wx.showLoading({ title: '核对上次付款...' });
+    try {
+      const status = await this.getPaymentOperationStatus(pending.operationId);
+      wx.hideLoading();
+      if (status.committed) {
+        if (Array.isArray(pending.cloudFileIDs) && pending.cloudFileIDs.length) await this.confirmUploadedFiles(pending.cloudFileIDs);
+        this.clearPendingPaymentOperation();
+        await this.fetchOrderDetail(this.data.orderId);
+        wx.showToast({ title: '上次付款已确认入账', icon: 'success' });
+        return true;
+      }
+
+      this._paymentOperationId = pending.operationId;
+      this._paymentUploadedCloudIds = Array.isArray(pending.cloudFileIDs) ? pending.cloudFileIDs : [];
+      this._paymentOutcomeUnknown = true;
+      this.setData({
+        ...(pending.form || {}),
+        showFinishModal: true,
+        localPhotos: [],
+        pendingPaymentCloudIds: this._paymentUploadedCloudIds,
+        paymentRetryLocked: true
+      }, () => this.recalcAmounts());
+      wx.showModal({
+        title: '继续上次付款',
+        content: '上次付款结果未确认。本次会复用原流水号重试，不会创建新的付款流水。',
+        showCancel: false
+      });
+      return true;
+    } catch (error) {
+      wx.hideLoading();
+      console.warn('核对上次付款失败：', error);
+      wx.showToast({ title: '暂时无法核对上次付款，请稍后重试', icon: 'none' });
+      return true;
+    }
+  },
+
+  async trackUploadedFile(fileID, orderId, operationId, kind) {
+    if (!fileID) throw new Error('UPLOAD_FILE_ID_MISSING');
+    try {
+      const res = await wx.cloud.callFunction({
+        name: 'manageOrder',
+        data: {
+          action: 'trackUploadedFiles',
+          data: { orderId, operationId, kind, fileIDs: [fileID] }
+        }
+      });
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'UPLOAD_TRACK_FAILED');
+      return true;
+    } catch (error) {
+      // 登记失败时文件尚未进入业务提交，可立即删除，避免产生无法追踪的孤儿文件。
+      try { await wx.cloud.deleteFile({ fileList: [fileID] }); } catch (deleteError) { console.warn('登记失败后的文件删除失败：', deleteError); }
+      throw error;
+    }
+  },
+
+  async confirmUploadedFiles(fileIDs) {
+    const fileList = Array.isArray(fileIDs) ? fileIDs.filter(Boolean) : [];
+    if (!fileList.length) return;
+    try {
+      await wx.cloud.callFunction({
+        name: 'manageOrder',
+        data: { action: 'confirmUploadedFiles', data: { fileIDs: fileList } }
+      });
+    } catch (error) {
+      // 确认失败不影响业务；72小时清理任务会先检查数据库引用，已引用文件不会被删除。
+      console.warn('确认云文件引用失败，将由72小时清理任务复核：', error);
+    }
+  },
+
+  async cleanupUploadedFiles(fileIDs) {
+    const fileList = Array.isArray(fileIDs) ? fileIDs.filter(Boolean) : [];
+    if (!fileList.length) return;
+    let deleted = false;
+    try {
+      await wx.cloud.deleteFile({ fileList });
+      deleted = true;
+    } catch (error) {
+      // 删除失败不能影响主业务；登记记录保留，超过72小时后由云端清理任务再次尝试。
+      console.warn('清理未引用云文件失败：', error);
+    }
+    if (deleted) {
+      try {
+        await wx.cloud.callFunction({
+          name: 'manageOrder',
+          data: { action: 'untrackUploadedFiles', data: { fileIDs: fileList } }
+        });
+      } catch (error) {
+        // 文件已经删除，即使登记记录暂时保留，定时任务也会在后续清掉记录。
+        console.warn('移除云文件登记失败：', error);
+      }
+    }
+  },
+
   fetchCandidateWorkers(city) {
     wx.cloud.callFunction({
       name: 'manageOrder',
@@ -219,6 +410,7 @@ Page({
 
     wx.showLoading({ title: '正在指派师傅...', mask: true });
     const updateData = {
+      workerId: worker._id || '',
       workerName: worker.name,
       workerPhone: worker.phone || '',
       workerGroupId: '',
@@ -231,6 +423,7 @@ Page({
         data: {
           action: 'updateOrder',
           orderId: this.data.orderId,
+          expectedVersion: Number(this.data.order && this.data.order.version || 0),
           data: updateData
         }
       });
@@ -238,21 +431,18 @@ Page({
       wx.hideLoading();
       const result = res.result || {};
       if (result.success) {
-        this.setData({
-          'order.workerName': updateData.workerName,
-          'order.workerPhone': updateData.workerPhone,
-          'order.workerGroupId': '',
-          'order.status': updateData.status
-        });
-        this.updatePermissions(this.data.order, this.data.currentUser);
         wx.showToast({ title: '指派成功', icon: 'success' });
+        await this.fetchOrderDetail(this.data.orderId);
       } else {
-        const errMsg = result.error ? (result.error.errMsg || JSON.stringify(result.error)) : (result.msg || '更新未生效');
-        wx.showModal({
-          title: '指派未成功',
-          content: `云端返回：${errMsg}`,
-          showCancel: false
-        });
+        const handled = await this.handleOrderMutationFailure(result, '指派未成功');
+        if (!handled) {
+          const errMsg = result.error ? (result.error.errMsg || JSON.stringify(result.error)) : (result.msg || '更新未生效');
+          wx.showModal({
+            title: '指派未成功',
+            content: `云端返回：${errMsg}`,
+            showCancel: false
+          });
+        }
       }
     } catch (err) {
       wx.hideLoading();
@@ -350,6 +540,7 @@ Page({
         data: {
           action: 'urgent',
           orderId: this.data.orderId,
+          expectedVersion: Number(this.data.order && this.data.order.version || 0),
           data: { isUrgent: true }
         }
       });
@@ -357,14 +548,10 @@ Page({
       wx.hideLoading();
       const result = res.result || {};
       if (result.success) {
-        if (result.notification && result.notification.success) {
-          wx.showToast({ title: '已催单，接单人员已通知', icon: 'none' });
-        } else {
-          wx.showModal({ title: '已标记紧急催单', content: '提醒未全部发送成功，可能未订阅或授权次数已用完。请直接联系接单人员。', showCancel: false });
-        }
-        this.fetchOrderDetail(this.data.orderId);
+        wx.showToast({ title: '已标记紧急催单', icon: 'none' });
+        await this.fetchOrderDetail(this.data.orderId);
       } else {
-        wx.showToast({ title: result.msg || '催单失败', icon: 'none' });
+        await this.handleOrderMutationFailure(result, '催单失败');
       }
     } catch (e) {
       wx.hideLoading();
@@ -404,8 +591,9 @@ Page({
 
   async submitEditTime() {
     if (!this.data.canEditAppointment) return wx.showToast({ title: '当前工单不可改期', icon: 'none' });
+    const order = this.data.order || {};
     const newTime = parseDateSmart(this.data.editTimeInput);
-    const oldTime = this.data.order.appointmentTime || '';
+    const oldTime = order.appointmentTime || '';
 
     if (!newTime) {
       return wx.showToast({ title: '请输入预约时间', icon: 'none' });
@@ -417,47 +605,15 @@ Page({
     }
 
     wx.showLoading({ title: '正在保存改期...' });
-    const now = new Date();
-    const currentUser = this.data.currentUser;
-
-    const newLog = {
-      id: 'time_' + Date.now(),
-      oldTime: oldTime,
-      newTime: newTime,
-      operatorName: (currentUser && currentUser.name) || '员工',
-      operatorRole: (currentUser && currentUser.role) || 'service',
-      time: now.toISOString(),
-      timeFormatted: formatDateTime(now)
-    };
-
-    const existingLogs = Array.isArray(this.data.order.appointmentLogs) ? this.data.order.appointmentLogs : [];
-    const updatedLogs = [newLog, ...existingLogs];
-
-    const changeFeedback = {
-      id: 'fb_' + Date.now(),
-      time: now.toISOString(),
-      timeFormatted: formatDateTime(now),
-      operatorName: (currentUser && currentUser.name) || '员工',
-      operatorRole: (currentUser && currentUser.role) || 'service',
-      content: `[预约改期] 预约时间由【${oldTime}】更改为【${newTime}】`,
-      photos: []
-    };
-    const existingFeedbacks = Array.isArray(this.data.order.feedbacks) ? this.data.order.feedbacks : [];
-    const updatedFeedbacks = [changeFeedback, ...existingFeedbacks];
-
-    const updateData = {
-      appointmentTime: newTime,
-      appointmentLogs: updatedLogs,
-      feedbacks: updatedFeedbacks
-    };
-
     try {
       const res = await wx.cloud.callFunction({
         name: 'manageOrder',
         data: {
           action: 'editTime',
           orderId: this.data.orderId,
-          data: updateData
+          expectedVersion: Number(order.version || 0),
+          // 历史 appointmentLogs / feedbacks 由云端事务读取最新订单后追加。
+          data: { appointmentTime: newTime }
         }
       });
 
@@ -466,9 +622,9 @@ Page({
       if (result.success) {
         this.setData({ showEditTimeModal: false });
         wx.showToast({ title: '改期成功！', icon: 'success' });
-        this.fetchOrderDetail(this.data.orderId);
+        await this.fetchOrderDetail(this.data.orderId);
       } else {
-        wx.showToast({ title: result.msg || '改期失败，请重试', icon: 'none' });
+        await this.handleOrderMutationFailure(result, '改期失败，请重试');
       }
     } catch (err) {
       wx.hideLoading();
@@ -495,43 +651,21 @@ Page({
   // 客服取消订单：打上 service_cancel 标识
   async submitCancelOrder() {
     const reason = this.data.cancelReason;
+    const order = this.data.order || {};
     if (!reason) {
       return wx.showToast({ title: '请填写取消原因', icon: 'none' });
     }
 
     wx.showLoading({ title: '正在取消工单...' });
-    const now = new Date();
-    const currentUser = this.data.currentUser;
-
-    const cancelFeedback = {
-      id: 'fb_' + Date.now(),
-      time: now.toISOString(),
-      timeFormatted: formatDateTime(now),
-      operatorName: (currentUser && currentUser.name) || '客服',
-      operatorRole: 'service',
-      content: `[客服退单取消] 理由：${reason}`,
-      photos: []
-    };
-
-    const existingFeedbacks = Array.isArray(this.data.order.feedbacks) ? this.data.order.feedbacks : [];
-    const updatedFeedbacks = [cancelFeedback, ...existingFeedbacks];
-
-    const updateData = {
-      status: '未成单',
-      uncompletedType: 'service_cancel',
-      cancelReason: reason,
-      cancelOperator: (currentUser && currentUser.name) || '客服',
-      cancelTime: now.toISOString(),
-      feedbacks: updatedFeedbacks
-    };
-
     try {
       const res = await wx.cloud.callFunction({
         name: 'manageOrder',
         data: {
           action: 'cancelOrder',
           orderId: this.data.orderId,
-          data: updateData
+          expectedVersion: Number(order.version || 0),
+          // 状态、取消时间、操作人和 feedback 由云端事务生成，客户端只提交原因。
+          data: { cancelReason: reason }
         }
       });
 
@@ -539,10 +673,13 @@ Page({
       const result = res.result || {};
       if (result.success) {
         this.setData({ showCancelModal: false });
-        wx.showToast({ title: '工单已退单归档', icon: 'success' });
-        this.fetchOrderDetail(this.data.orderId);
+        wx.showToast({
+          title: result.notification && !result.notification.success ? '退单已保存，群通知待处理' : '工单已退单归档',
+          icon: 'success'
+        });
+        await this.fetchOrderDetail(this.data.orderId);
       } else {
-        wx.showToast({ title: result.msg || '取消失败，请重试', icon: 'none' });
+        await this.handleOrderMutationFailure(result, '取消失败，请重试');
       }
     } catch (err) {
       wx.hideLoading();
@@ -580,6 +717,7 @@ Page({
         data: {
           action: 'failOrder',
           orderId: this.data.orderId,
+          expectedVersion: Number(this.data.order && this.data.order.version || 0),
           data: { failReason: reason }
         }
       });
@@ -588,10 +726,13 @@ Page({
       const result = res.result || {};
       if (result.success) {
         this.setData({ showFailModal: false });
-        wx.showToast({ title: '已归入未成单', icon: 'success' });
-        this.fetchOrderDetail(this.data.orderId);
+        wx.showToast({
+          title: result.notification && !result.notification.success ? '未成单已保存，群通知待处理' : '已归入未成单',
+          icon: 'success'
+        });
+        await this.fetchOrderDetail(this.data.orderId);
       } else {
-        wx.showToast({ title: result.msg || '操作失败，请重试', icon: 'none' });
+        await this.handleOrderMutationFailure(result, '操作失败，请重试');
       }
     } catch (err) {
       wx.hideLoading();
@@ -606,7 +747,8 @@ Page({
     const alipay = Number(this.data.inputAlipay) || 0;
     const total = Number(this.data.inputTotalAmount) || 0;
 
-    const existing = this.data.settleMode === 'prepay' ? Number(this.data.existingPrepayPaid || 0) : 0;
+    const isPrepayAdd = this.data.settleMode === 'prepay' && this.data.prepayAdjustmentMode === 'add';
+    const existing = isPrepayAdd ? Number(this.data.existingPrepayPaid || 0) : 0;
     const sum = Number((cash + wechat + alipay + existing).toFixed(2));
     const remain = Math.max(0, Number((total - sum).toFixed(2)));
 
@@ -645,7 +787,9 @@ Page({
     this.setData({ correctionReason: e.detail.value.trim() });
   },
 
-  openFinishModal() {
+  async openFinishModal() {
+    if (await this.restorePendingPaymentIfNeeded()) return;
+    this.clearPendingPaymentOperation();
     const o = this.data.order || {};
     const cash = o.cashAmount ? String(o.cashAmount) : '';
     const wechat = o.wechatAmount ? String(o.wechatAmount) : (o.finalAmount && !o.cashAmount && !o.alipayAmount ? String(o.finalAmount) : '');
@@ -657,6 +801,7 @@ Page({
       settleMode: 'full',
       existingPrepayPaid: 0,
       existingPrepayChannels: { cash: 0, wechat: 0, alipay: 0 },
+      prepayAdjustmentMode: 'add',
       inputCash: cash,
       inputWechat: wechat,
       inputAlipay: alipay,
@@ -664,6 +809,8 @@ Page({
       modalNote: '',
       correctionReason: '',
       localPhotos: [],
+      pendingPaymentCloudIds: [],
+      paymentRetryLocked: false,
       initialSnapshot: {
         cash: cash,
         wechat: wechat,
@@ -675,21 +822,30 @@ Page({
     }, () => this.recalcAmounts());
   },
 
-  openPrepayModal() {
+  async openPrepayModal() {
+    if (await this.restorePendingPaymentIfNeeded()) return;
+    this.clearPendingPaymentOperation();
     const o = this.data.order || {};
     const hasExisting = o.settleType === '预付款';
-    const cash = hasExisting ? '' : (o.cashAmount ? String(o.cashAmount) : '');
-    const wechat = hasExisting ? '' : (o.wechatAmount ? String(o.wechatAmount) : '');
-    const alipay = hasExisting ? '' : (o.alipayAmount ? String(o.alipayAmount) : '');
     const existingPaid = hasExisting ? Number(o.depositAmount || o.finalAmount || 0) : 0;
+    const existingChannels = hasExisting ? {
+      cash: Number(o.cashAmount || 0),
+      wechat: Number(o.wechatAmount || 0),
+      alipay: Number(o.alipayAmount || 0)
+    } : { cash: 0, wechat: 0, alipay: 0 };
+    const mode = hasExisting && Number(o.remainingAmount || 0) <= 0 ? 'correct' : 'add';
+    const cash = mode === 'correct' && existingChannels.cash ? String(existingChannels.cash) : '';
+    const wechat = mode === 'correct' && existingChannels.wechat ? String(existingChannels.wechat) : '';
+    const alipay = mode === 'correct' && existingChannels.alipay ? String(existingChannels.alipay) : '';
     const total = o.totalAmount ? String(o.totalAmount) : '';
     const companions = o.companionWorkers || '';
 
     this.setData({
       showFinishModal: true,
       settleMode: 'prepay',
+      prepayAdjustmentMode: mode,
       existingPrepayPaid: existingPaid,
-      existingPrepayChannels: hasExisting ? { cash: Number(o.cashAmount || 0), wechat: Number(o.wechatAmount || 0), alipay: Number(o.alipayAmount || 0) } : { cash: 0, wechat: 0, alipay: 0 },
+      existingPrepayChannels: existingChannels,
       inputCash: cash,
       inputWechat: wechat,
       inputAlipay: alipay,
@@ -698,23 +854,60 @@ Page({
       modalNote: '',
       correctionReason: '',
       localPhotos: [],
+      pendingPaymentCloudIds: [],
+      paymentRetryLocked: false,
       initialSnapshot: {
-        cash: cash,
-        wechat: wechat,
-        alipay: alipay,
+        cash,
+        wechat,
+        alipay,
         totalAmount: total,
-        companions: companions,
+        companions,
         note: ''
       }
     }, () => this.recalcAmounts());
   },
 
+  switchPrepayAdjustmentMode(e) {
+    if (this.data.paymentRetryLocked) return wx.showToast({ title: '上次付款待确认，请直接重试原操作', icon: 'none' });
+    const mode = e.currentTarget.dataset.mode === 'correct' ? 'correct' : 'add';
+    if (mode === this.data.prepayAdjustmentMode) return;
+    const channels = this.data.existingPrepayChannels || {};
+    const cash = mode === 'correct' && Number(channels.cash || 0) ? String(Number(channels.cash || 0)) : '';
+    const wechat = mode === 'correct' && Number(channels.wechat || 0) ? String(Number(channels.wechat || 0)) : '';
+    const alipay = mode === 'correct' && Number(channels.alipay || 0) ? String(Number(channels.alipay || 0)) : '';
+    const previousSnapshot = this.data.initialSnapshot || {};
+    this.clearPendingPaymentOperation();
+    this.setData({
+      prepayAdjustmentMode: mode,
+      inputCash: cash,
+      inputWechat: wechat,
+      inputAlipay: alipay,
+      correctionReason: '',
+      initialSnapshot: {
+        cash,
+        wechat,
+        alipay,
+        totalAmount: previousSnapshot.totalAmount !== undefined ? previousSnapshot.totalAmount : (this.data.inputTotalAmount || ''),
+        companions: previousSnapshot.companions !== undefined ? previousSnapshot.companions : '',
+        note: previousSnapshot.note !== undefined ? previousSnapshot.note : ''
+      }
+    }, () => this.recalcAmounts());
+  },
+
   closeFinishModal() {
-    this.setData({ showFinishModal: false });
+    if (this._paymentOutcomeUnknown && this._paymentOperationId) {
+      // 结果未知时不能丢掉原 operationId。关闭只隐藏窗口，下次打开先核对并复用同一流水号。
+      this.setData({ showFinishModal: false, localPhotos: [] });
+      wx.showToast({ title: '已保留上次付款状态', icon: 'none' });
+      return;
+    }
+    this.clearPendingPaymentOperation();
+    this.setData({ showFinishModal: false, localPhotos: [] });
   },
 
   chooseFinishPhoto() {
-    const remain = 4 - this.data.localPhotos.length;
+    if (this.data.paymentRetryLocked) return wx.showToast({ title: '上次付款待确认，暂不能修改凭据', icon: 'none' });
+    const remain = Math.max(0, 4 - this.data.localPhotos.length - (this.data.pendingPaymentCloudIds || []).length);
     wx.chooseMedia({
       count: remain,
       mediaType: ['image'],
@@ -745,17 +938,20 @@ Page({
   },
 
   async submitFinishOrder() {
-    const { settleMode, inputCash, inputWechat, inputAlipay, inputTotalAmount, fullTotal, depositTotal, remainTotal, modalCompanions, modalNote, correctionReason, localPhotos, orderId, order, currentUser, initialSnapshot } = this.data;
+    const { settleMode, prepayAdjustmentMode, inputCash, inputWechat, inputAlipay, inputTotalAmount, fullTotal, depositTotal, remainTotal, modalCompanions, modalNote, correctionReason, localPhotos, orderId, order, initialSnapshot } = this.data;
     const operationId = this._paymentOperationId || ('op_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
     this._paymentOperationId = operationId;
 
     const existingChannels = settleMode === 'prepay' ? (this.data.existingPrepayChannels || {}) : {};
-    const cash = (Number(inputCash) || 0) + (Number(existingChannels.cash) || 0);
-    const wechat = (Number(inputWechat) || 0) + (Number(existingChannels.wechat) || 0);
-    const alipay = (Number(inputAlipay) || 0) + (Number(existingChannels.alipay) || 0);
+    const isExistingPrepay = Boolean(order && order.settleType === '预付款');
+    const isPrepayCorrection = settleMode === 'prepay' && isExistingPrepay && prepayAdjustmentMode === 'correct';
+    const shouldAddExisting = settleMode === 'prepay' && !isPrepayCorrection;
+    const cash = (Number(inputCash) || 0) + (shouldAddExisting ? Number(existingChannels.cash || 0) : 0);
+    const wechat = (Number(inputWechat) || 0) + (shouldAddExisting ? Number(existingChannels.wechat || 0) : 0);
+    const alipay = (Number(inputAlipay) || 0) + (shouldAddExisting ? Number(existingChannels.alipay || 0) : 0);
     const paidSum = settleMode === 'full' ? fullTotal : depositTotal;
 
-    if (paidSum <= 0) {
+    if (paidSum <= 0 && !isPrepayCorrection) {
       return wx.showToast({ title: '请输入至少一项收款金额', icon: 'none' });
     }
 
@@ -769,10 +965,21 @@ Page({
       }
     }
 
+    const isExistingFullCorrection = settleMode === 'full' && Boolean(order && order.settleType === '全款');
+    if (settleMode === 'prepay' && isExistingPrepay && prepayAdjustmentMode === 'add') {
+      const previousPaid = Number(order.depositAmount || order.finalAmount || 0);
+      const previousTotal = Number(order.totalAmount || 0);
+      const currentTotal = Number(inputTotalAmount) || 0;
+      if (Math.abs(paidSum - previousPaid) <= 0.01 && Math.abs(currentTotal - previousTotal) > 0.01) {
+        return wx.showToast({ title: '修改工程总额请切换到修正模式', icon: 'none' });
+      }
+    }
+
     if (order && (order.settleType === (settleMode === 'full' ? '全款' : '预付款'))) {
       const snap = initialSnapshot || {};
       const isNoChange = (
-        localPhotos.length === 0 &&
+        !this._paymentOutcomeUnknown &&
+        localPhotos.length === 0 && (this.data.pendingPaymentCloudIds || []).length === 0 &&
         String(inputCash) === String(snap.cash || '') &&
         String(inputWechat) === String(snap.wechat || '') &&
         String(inputAlipay) === String(snap.alipay || '') &&
@@ -783,50 +990,32 @@ Page({
 
       if (isNoChange) {
         wx.showToast({ title: '内容未做修改，无需重复保存', icon: 'none' });
+        this.clearPendingPaymentOperation();
         this.setData({ showFinishModal: false });
         return;
       }
     }
 
+    if ((isPrepayCorrection || isExistingFullCorrection) && !String(correctionReason || '').trim()) {
+      return wx.showToast({ title: '请填写金额修正原因', icon: 'none' });
+    }
+
     wx.showLoading({ title: '正在上传拍照凭据...' });
+    const uploadedCloudIds = Array.isArray(this._paymentUploadedCloudIds) ? [...this._paymentUploadedCloudIds] : [];
 
     try {
-      const uploadedCloudIds = [];
       for (let i = 0; i < localPhotos.length; i++) {
         const localPath = localPhotos[i];
-        const cloudPath = `orders/${orderId}/pay_${Date.now()}_${i}.jpg`;
+        const cloudPath = `orders/${orderId}/payments/${operationId}/${Date.now()}_${i}.jpg`;
         const res = await wx.cloud.uploadFile({
           cloudPath: cloudPath,
           filePath: localPath
         });
-        if (res.fileID) uploadedCloudIds.push(res.fileID);
+        if (res.fileID) {
+          await this.trackUploadedFile(res.fileID, orderId, operationId, 'payment');
+          uploadedCloudIds.push(res.fileID);
+        }
       }
-
-      const now = new Date();
-      const opRole = (currentUser && currentUser.role === 'leader') ? '主管' : '师傅';
-      const newLog = {
-        id: 'log_' + Date.now(),
-        time: now.toISOString(),
-        timeFormatted: formatDateTime(now),
-        operatorName: (currentUser && currentUser.name) || opRole,
-        operatorRole: (currentUser && currentUser.role) || 'worker',
-        settleType: settleMode === 'full' ? '全款' : '预付款',
-        cashAmount: cash,
-        wechatAmount: wechat,
-        alipayAmount: alipay,
-        currentPaid: paidSum,
-        totalAmount: settleMode === 'full' ? paidSum : (Number(inputTotalAmount) || paidSum),
-        remainingAmount: settleMode === 'full' ? 0 : remainTotal,
-        companionWorkers: modalCompanions,
-        photos: uploadedCloudIds,
-        note: modalNote
-      };
-
-      const existingLogs = Array.isArray(order.paymentLogs) ? order.paymentLogs : [];
-      const updatedLogs = [newLog, ...existingLogs];
-
-      const existingPhotos = Array.isArray(order.finishPhotos) ? order.finishPhotos : [];
-      const mergedPhotos = uploadedCloudIds.length > 0 ? [...uploadedCloudIds, ...existingPhotos] : existingPhotos;
 
       let updateData = {
         settleType: settleMode === 'full' ? '全款' : '预付款',
@@ -838,17 +1027,21 @@ Page({
         totalAmount: settleMode === 'full' ? paidSum : (Number(inputTotalAmount) || paidSum),
         remainingAmount: settleMode === 'full' ? 0 : remainTotal,
         companionWorkers: modalCompanions,
-        finishPhotos: mergedPhotos,
+        finishPhotos: uploadedCloudIds,
+        newFinishPhotos: uploadedCloudIds,
         finishNote: modalNote || order.finishNote || '',
-        paymentLogs: updatedLogs,
-        isUrgent: false,
-        finishTime: now.toISOString()
+        isUrgent: false
       };
 
-      if (settleMode === 'full' || remainTotal === 0) {
-        updateData.status = '已完工';
+      let operationType;
+      if (settleMode === 'prepay' && isPrepayCorrection) {
+        operationType = 'amount_correction';
+      } else if (order && order.settleType) {
+        operationType = settleMode === 'prepay'
+          ? (paidSum > Number(order.depositAmount || order.finalAmount || 0) ? (remainTotal === 0 ? 'final_payment' : 'additional_payment') : 'amount_correction')
+          : 'amount_correction';
       } else {
-        updateData.status = '已派单';
+        operationType = settleMode === 'full' ? 'full_payment' : 'deposit_payment';
       }
 
       wx.showLoading({ title: '正在保存并留痕...' });
@@ -857,31 +1050,45 @@ Page({
         data: {
           action: 'finishOrder',
           orderId: orderId,
-          data: { ...updateData, operationId, operationType: (order && order.settleType) ? ((settleMode === 'prepay' && paidSum > Number(order.depositAmount || 0)) ? (remainTotal === 0 ? 'final_payment' : 'additional_payment') : 'amount_correction') : (settleMode === 'full' ? 'full_payment' : 'deposit_payment'), amountThisTime: settleMode === 'prepay' ? Math.max(0, paidSum - Number(order && order.depositAmount || 0)) : paidSum, correctionReason: correctionReason || modalNote || '' }
+          expectedVersion: Number(order && order.version || 0),
+          data: { ...updateData, operationId, operationType, amountThisTime: settleMode === 'prepay' ? Math.max(0, paidSum - Number(order && (order.depositAmount || order.finalAmount) || 0)) : paidSum, correctionReason: correctionReason || modalNote || '' }
         }
       });
 
       wx.hideLoading();
       const result = res.result || {};
       if (result.success) {
-        this._paymentOperationId = null;
-        this.setData({ showFinishModal: false });
+        // duplicate 也可能是“第一次已提交但响应丢失”。只做引用确认，不立即删除照片；未引用文件由72小时任务清理。
+        if (uploadedCloudIds.length) await this.confirmUploadedFiles(uploadedCloudIds);
+        this.clearPendingPaymentOperation();
+        this.setData({ showFinishModal: false, localPhotos: [] });
         wx.showToast({
           title: result.notification && !result.notification.success ? '订单已保存，群通知待处理' : (settleMode === 'full' ? '全款结单已留痕！' : '预付定金已留痕！'),
           icon: 'success'
         });
-        this.fetchOrderDetail(orderId);
+        await this.fetchOrderDetail(orderId);
       } else {
-        wx.showToast({ title: result.msg || '保存失败，请重试', icon: 'none' });
+        // 云函数明确返回失败，说明本次上传文件未被此次业务提交引用，可以清理。
+        await this.cleanupUploadedFiles(uploadedCloudIds);
+        this.clearPendingPaymentOperation();
+        await this.handleOrderMutationFailure(result, '保存失败，请重试');
       }
     } catch (err) {
       console.error(err);
       wx.hideLoading();
-      wx.showToast({ title: '保存失败，请重试', icon: 'none' });
+      // 网络/调用异常无法判断服务端是否已经提交。保留 operationId 和已上传文件，后续只能核对或使用同一流水号重试。
+      this.savePendingPaymentOperation(operationId, uploadedCloudIds);
+      this.setData({ pendingPaymentCloudIds: uploadedCloudIds });
+      wx.showModal({
+        title: '付款结果待确认',
+        content: '网络异常，暂时无法确认本次付款是否已入账。请勿重新创建一笔付款；再次打开付款窗口时系统会先核对并复用同一流水号。',
+        showCancel: false
+      });
     }
   },
 
   openFeedbackModal() {
+    this._feedbackOperationId = null;
     this.setData({
       showFeedbackModal: true,
       feedbackContent: '',
@@ -890,7 +1097,8 @@ Page({
   },
 
   closeFeedbackModal() {
-    this.setData({ showFeedbackModal: false });
+    this._feedbackOperationId = null;
+    this.setData({ showFeedbackModal: false, feedbackContent: '', feedbackPhotos: [] });
   },
 
   onFeedbackContentInput(e) {
@@ -920,62 +1128,67 @@ Page({
   },
 
   async submitFeedback() {
-    const { feedbackContent, feedbackPhotos, orderId, order, currentUser } = this.data;
+    const { feedbackContent, feedbackPhotos, orderId, order } = this.data;
 
     if (!feedbackContent) {
       return wx.showToast({ title: '请输入回馈说明', icon: 'none' });
     }
 
     wx.showLoading({ title: '正在提交回馈...' });
+    const feedbackOperationId = this._feedbackOperationId || ('fbop_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+    this._feedbackOperationId = feedbackOperationId;
 
+    const uploadedCloudIds = [];
     try {
-      const uploadedCloudIds = [];
       for (let i = 0; i < feedbackPhotos.length; i++) {
         const localPath = feedbackPhotos[i];
-        const cloudPath = `orders/${orderId}/feedback_${Date.now()}_${i}.jpg`;
+        const cloudPath = `orders/${orderId}/feedback/${feedbackOperationId}/${Date.now()}_${i}.jpg`;
         const res = await wx.cloud.uploadFile({
           cloudPath: cloudPath,
           filePath: localPath
         });
-        if (res.fileID) uploadedCloudIds.push(res.fileID);
+        if (res.fileID) {
+          await this.trackUploadedFile(res.fileID, orderId, feedbackOperationId, 'feedback');
+          uploadedCloudIds.push(res.fileID);
+        }
       }
-
-      const now = new Date();
-      const newFeedback = {
-        id: 'fb_' + Date.now(),
-        time: now.toISOString(),
-        timeFormatted: formatDateTime(now),
-        operatorName: (currentUser && currentUser.name) || '员工',
-        operatorRole: (currentUser && currentUser.role) || 'worker',
-        content: feedbackContent,
-        photos: uploadedCloudIds
-      };
-
-      const existingFeedbacks = Array.isArray(order.feedbacks) ? order.feedbacks : [];
-      const updatedFeedbacks = [newFeedback, ...existingFeedbacks];
 
       const res = await wx.cloud.callFunction({
         name: 'manageOrder',
         data: {
           action: 'feedback',
           orderId: orderId,
-          data: { feedbacks: updatedFeedbacks }
+          expectedVersion: Number(order && order.version || 0),
+          // 只提交本次回馈；服务端事务读取最新 feedbacks 后追加，避免并发覆盖。
+          data: {
+            content: feedbackContent,
+            photos: uploadedCloudIds,
+            operationId: feedbackOperationId
+          }
         }
       });
 
       wx.hideLoading();
       const result = res.result || {};
       if (result.success) {
-        this.setData({ showFeedbackModal: false });
+        if (result.duplicate && uploadedCloudIds.length) await this.cleanupUploadedFiles(uploadedCloudIds);
+        else if (uploadedCloudIds.length) await this.confirmUploadedFiles(uploadedCloudIds);
+        this._feedbackOperationId = null;
+        this.setData({ showFeedbackModal: false, feedbackContent: '', feedbackPhotos: [] });
         wx.showToast({ title: '回馈已提交！', icon: 'success' });
-        this.fetchOrderDetail(orderId);
+        await this.fetchOrderDetail(orderId);
       } else {
-        wx.showToast({ title: result.msg || '提交回馈失败', icon: 'none' });
+        // 服务端明确拒绝时，此次上传的文件没有形成数据库引用，可以安全清理。
+        await this.cleanupUploadedFiles(uploadedCloudIds);
+        this._feedbackOperationId = null;
+        await this.handleOrderMutationFailure(result, '提交回馈失败');
       }
     } catch (err) {
+      // 网络异常时不能判断服务端是否已经提交成功，因此不主动删除云文件，避免误删已引用照片。
       console.error(err);
       wx.hideLoading();
-      wx.showToast({ title: '提交回馈失败', icon: 'none' });
+      wx.showToast({ title: '提交结果未确认，请刷新工单后再操作', icon: 'none' });
+      await this.fetchOrderDetail(orderId);
     }
   }
 });

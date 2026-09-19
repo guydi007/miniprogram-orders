@@ -148,7 +148,7 @@
     <!-- 进度回馈按钮：非未成单均可提交 -->
     <button 
       class="btn-action btn-feedback" 
-      wx:if="{{ order.status !== '未成单' }}" 
+      wx:if="{{ currentUser && (currentUser.role === 'service' || currentUser.role === 'leader' || currentUser.role === 'worker') && order.status !== '未成单' }}" 
       bindtap="openFeedbackModal"
     >
       💬 回馈
@@ -235,14 +235,15 @@
             {{ item.settleType }}记录
           </view>
           
-          <view class="log-amount-row" wx:if="{{ item.settleType === '全款' }}">
-            <text class="log-strong">实收合计：¥{{ item.currentPaid }}</text>
-            <text class="log-sub">（现金:{{ item.cashAmount || 0 }} / 微信:{{ item.wechatAmount || 0 }} / 支付宝:{{ item.alipayAmount || 0 }}）</text>
+          <view class="log-amount-row">
+            <text class="log-strong">{{ item.operationLabel }}：{{ item.isCorrection ? '累计实收' : '本次收款' }} ¥{{ item.isCorrection ? item.paidAfter : item.amountThisTime }}</text>
+            <text class="log-sub" wx:if="{{ !item.isCorrection }}">（累计实收:¥{{ item.paidAfter }}）</text>
           </view>
-          
+          <view class="log-amount-row">
+            <text class="log-sub">渠道累计：现金 {{ item.cashAmount || 0 }} / 微信 {{ item.wechatAmount || 0 }} / 支付宝 {{ item.alipayAmount || 0 }}</text>
+          </view>
           <view class="log-amount-row" wx:if="{{ item.settleType === '预付款' }}">
-            <text class="log-strong">定金合计：¥{{ item.currentPaid }}</text>
-            <text class="log-sub">（总计:¥{{ item.totalAmount }} / 待收尾款:¥{{ item.remainingAmount }}）</text>
+            <text class="log-sub">工程总计:¥{{ item.totalAmount }} / 待收尾款:¥{{ item.remainingAmount }}</text>
           </view>
 
           <view class="log-companion" wx:if="{{ item.companionWorkers }}">
@@ -364,19 +365,20 @@
   <view class="modal-mask" wx:if="{{ showFinishModal && settleMode === 'full' }}">
     <view class="modal-box">
       <view class="modal-title">🎉 全款完工结单录入/修改</view>
+      <view class="cancel-tips" wx:if="{{ paymentRetryLocked }}">上次付款结果待确认：当前表单已锁定，只能使用原内容和原流水号重试。</view>
 
       <view class="split-pay-grid">
         <view class="split-item">
           <text class="split-label">现金 (元)</text>
-          <input class="split-input" type="digit" placeholder="0" value="{{ inputCash }}" bindinput="onCashInput" />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputCash }}" disabled="{{ paymentRetryLocked }}" bindinput="onCashInput" />
         </view>
         <view class="split-item">
           <text class="split-label">微信 (元)</text>
-          <input class="split-input" type="digit" placeholder="0" value="{{ inputWechat }}" bindinput="onWechatInput" />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputWechat }}" disabled="{{ paymentRetryLocked }}" bindinput="onWechatInput" />
         </view>
         <view class="split-item">
           <text class="split-label">支付宝 (元)</text>
-          <input class="split-input" type="digit" placeholder="0" value="{{ inputAlipay }}" bindinput="onAlipayInput" />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputAlipay }}" disabled="{{ paymentRetryLocked }}" bindinput="onAlipayInput" />
         </view>
       </view>
 
@@ -387,17 +389,21 @@
 
       <view class="field-item mt-20">
         <text class="field-label">同行人员（手输文本）：</text>
-        <input class="modal-input" placeholder="如：学徒小张、王师傅（无则留空）" value="{{ modalCompanions }}" bindinput="onModalCompanionsInput" />
+        <input class="modal-input" placeholder="如：学徒小张、王师傅（无则留空）" value="{{ modalCompanions }}" disabled="{{ paymentRetryLocked }}" bindinput="onModalCompanionsInput" />
       </view>
 
       <view class="field-item mt-20">
         <text class="field-label">本次施工拍照留痕（可多次补拍）：</text>
+        <view class="cancel-tips" wx:if="{{ pendingPaymentCloudIds.length }}">上次网络异常时已上传的凭据已保留，重试时会继续使用，不会重复上传。</view>
         <view class="upload-photo-box">
+          <view class="photo-thumb" wx:for="{{ pendingPaymentCloudIds }}" wx:key="*this">
+            <image class="thumb-img" src="{{ item }}" mode="aspectFill" bindtap="previewPhoto" data-url="{{ item }}" data-list="{{ pendingPaymentCloudIds }}" />
+          </view>
           <view class="photo-thumb" wx:for="{{ localPhotos }}" wx:key="*this">
             <image class="thumb-img" src="{{ item }}" mode="aspectFill" />
             <text class="del-btn" bindtap="deletePhoto" data-index="{{ index }}">✕</text>
           </view>
-          <view class="add-photo-btn" bindtap="chooseFinishPhoto" wx:if="{{ localPhotos.length < 4 }}">
+          <view class="add-photo-btn" bindtap="chooseFinishPhoto" wx:if="{{ localPhotos.length + pendingPaymentCloudIds.length < 4 }}">
             <text class="plus">+</text>
             <text class="tip">拍现场</text>
           </view>
@@ -407,10 +413,10 @@
       <view class="field-item mt-20">
         <view wx:if="{{ order.settleType }}">
           <text class="field-label required">金额修正原因：</text>
-          <textarea class="modal-textarea" placeholder="修改金额或支付渠道时必填" value="{{ correctionReason }}" bindinput="onCorrectionReasonInput" />
+          <textarea class="modal-textarea" placeholder="修改金额或支付渠道时必填" value="{{ correctionReason }}" disabled="{{ paymentRetryLocked }}" bindinput="onCorrectionReasonInput" />
         </view>
         <text class="field-label">施工/修改备注说明：</text>
-        <textarea class="modal-textarea" placeholder="更换明细、费用调整原因等..." value="{{ modalNote }}" bindinput="onModalNoteInput" />
+        <textarea class="modal-textarea" placeholder="更换明细、费用调整原因等..." value="{{ modalNote }}" disabled="{{ paymentRetryLocked }}" bindinput="onModalNoteInput" />
       </view>
 
       <view class="modal-btns mt-30">
@@ -424,31 +430,39 @@
   <view class="modal-mask" wx:if="{{ showFinishModal && settleMode === 'prepay' }}">
     <view class="modal-box">
       <view class="modal-title">📑 预付单录入/修改</view>
+      <view class="cancel-tips" wx:if="{{ paymentRetryLocked }}">上次付款结果待确认：当前表单已锁定，只能使用原内容和原流水号重试。</view>
 
-      <text class="field-label">已收定金拆分 (元)：</text>
+      <view class="quick-time-grid mt-10" wx:if="{{ order.settleType === '预付款' }}">
+        <view class="quick-pill {{ prepayAdjustmentMode === 'add' ? 'quick-pill-active' : '' }}" bindtap="switchPrepayAdjustmentMode" data-mode="add">追加收款</view>
+        <view class="quick-pill {{ prepayAdjustmentMode === 'correct' ? 'quick-pill-active' : '' }}" bindtap="switchPrepayAdjustmentMode" data-mode="correct">修正累计金额/渠道</view>
+      </view>
+      <view class="cancel-tips" wx:if="{{ order.settleType === '预付款' && prepayAdjustmentMode === 'add' }}">输入的是本次新增收款，系统会自动加到已有实收。</view>
+      <view class="cancel-tips" wx:if="{{ order.settleType === '预付款' && prepayAdjustmentMode === 'correct' }}">下方填写修正后的累计金额，可直接调整支付渠道或减少已收金额。</view>
+
+      <text class="field-label">{{ prepayAdjustmentMode === 'add' ? '本次收款拆分 (元)：' : '累计实收拆分 (元)：' }}</text>
       <view class="split-pay-grid">
         <view class="split-item">
           <text class="split-label">现金</text>
-          <input class="split-input" type="digit" placeholder="0" value="{{ inputCash }}" bindinput="onCashInput" />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputCash }}" disabled="{{ paymentRetryLocked }}" bindinput="onCashInput" />
         </view>
         <view class="split-item">
           <text class="split-label">微信</text>
-          <input class="split-input" type="digit" placeholder="0" value="{{ inputWechat }}" bindinput="onWechatInput" />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputWechat }}" disabled="{{ paymentRetryLocked }}" bindinput="onWechatInput" />
         </view>
         <view class="split-item">
           <text class="split-label">支付宝</text>
-          <input class="split-input" type="digit" placeholder="0" value="{{ inputAlipay }}" bindinput="onAlipayInput" />
+          <input class="split-input" type="digit" placeholder="0" value="{{ inputAlipay }}" disabled="{{ paymentRetryLocked }}" bindinput="onAlipayInput" />
         </view>
       </view>
 
       <view class="calc-total-box prepay-box">
-        <text class="calc-title">已收定金合计：</text>
+        <text class="calc-title">{{ prepayAdjustmentMode === 'add' ? '累计已收合计：' : '修正后实收合计：' }}</text>
         <text class="calc-num">¥{{ depositTotal }}</text>
       </view>
 
       <view class="field-item mt-20">
         <text class="field-label required">工程总计金额 (元)：</text>
-        <input class="modal-input" type="digit" placeholder="如：800" value="{{ inputTotalAmount }}" bindinput="onTotalAmountInput" />
+        <input class="modal-input" type="digit" placeholder="如：800" value="{{ inputTotalAmount }}" disabled="{{ paymentRetryLocked }}" bindinput="onTotalAmountInput" />
       </view>
 
       <view class="calc-remain-box">
@@ -457,17 +471,21 @@
 
       <view class="field-item mt-20">
         <text class="field-label">同行人员（手输文本）：</text>
-        <input class="modal-input" placeholder="如：学徒小赵、李师傅" value="{{ modalCompanions }}" bindinput="onModalCompanionsInput" />
+        <input class="modal-input" placeholder="如：学徒小赵、李师傅" value="{{ modalCompanions }}" disabled="{{ paymentRetryLocked }}" bindinput="onModalCompanionsInput" />
       </view>
 
       <view class="field-item mt-20">
         <text class="field-label">定金凭据/现场拍照（留痕）：</text>
+        <view class="cancel-tips" wx:if="{{ pendingPaymentCloudIds.length }}">上次网络异常时已上传的凭据已保留，重试时会继续使用，不会重复上传。</view>
         <view class="upload-photo-box">
+          <view class="photo-thumb" wx:for="{{ pendingPaymentCloudIds }}" wx:key="*this">
+            <image class="thumb-img" src="{{ item }}" mode="aspectFill" bindtap="previewPhoto" data-url="{{ item }}" data-list="{{ pendingPaymentCloudIds }}" />
+          </view>
           <view class="photo-thumb" wx:for="{{ localPhotos }}" wx:key="*this">
             <image class="thumb-img" src="{{ item }}" mode="aspectFill" />
             <text class="del-btn" bindtap="deletePhoto" data-index="{{ index }}">✕</text>
           </view>
-          <view class="add-photo-btn" bindtap="chooseFinishPhoto" wx:if="{{ localPhotos.length < 4 }}">
+          <view class="add-photo-btn" bindtap="chooseFinishPhoto" wx:if="{{ localPhotos.length + pendingPaymentCloudIds.length < 4 }}">
             <text class="plus">+</text>
             <text class="tip">拍凭据</text>
           </view>
@@ -475,12 +493,12 @@
       </view>
 
       <view class="field-item mt-20">
-        <view wx:if="{{ order.settleType }}">
+        <view wx:if="{{ order.settleType === '预付款' && prepayAdjustmentMode === 'correct' }}">
           <text class="field-label required">金额修正原因：</text>
-          <textarea class="modal-textarea" placeholder="修改金额或支付渠道时必填" value="{{ correctionReason }}" bindinput="onCorrectionReasonInput" />
+          <textarea class="modal-textarea" placeholder="修改累计金额或支付渠道时必填" value="{{ correctionReason }}" disabled="{{ paymentRetryLocked }}" bindinput="onCorrectionReasonInput" />
         </view>
         <text class="field-label">约定说明与修改备注：</text>
-        <textarea class="modal-textarea" placeholder="约定上门安装时间、尾款结算方式说明等..." value="{{ modalNote }}" bindinput="onModalNoteInput" />
+        <textarea class="modal-textarea" placeholder="约定上门安装时间、尾款结算方式说明等..." value="{{ modalNote }}" disabled="{{ paymentRetryLocked }}" bindinput="onModalNoteInput" />
       </view>
 
       <view class="modal-btns mt-30">

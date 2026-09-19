@@ -725,7 +725,7 @@
     box-sizing: border-box;
   }
   
-  .btn-primary {
+.btn-primary {
     background-color: #07c160;
     color: #ffffff;
     border-radius: 12rpx;
@@ -733,7 +733,17 @@
     padding: 20rpx 0;
     width: 100%;
     text-align: center;
-  }
+}
+
+.btn-secondary {
+  background-color: #f2f3f5;
+  color: #576b95;
+  border-radius: 12rpx;
+  font-size: 28rpx;
+  padding: 18rpx 0;
+  width: 100%;
+  text-align: center;
+}
   
   .modal-btns {
     display: flex;

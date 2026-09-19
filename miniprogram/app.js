@@ -85,9 +85,7 @@ App({
   // 用户身份与 OpenID 核验
   checkUserAuth() {
     return new Promise((resolve) => {
-      this.fetchWorkerList();
-
-      // 1. 获取当前微信用户的 OpenID
+      // 1. 获取当前微信用户的 OpenID / 测试会话
       wx.cloud.callFunction({
         name: 'login'
       }).then(res => {
@@ -112,11 +110,14 @@ App({
           return resolve(null);
         }
 
-        // 2. 根据 OpenID 精准查询绑定的员工
-        const db = wx.cloud.database();
-        db.collection('users').where({ openid: openid }).get().then(uRes => {
-          if (uRes.data && uRes.data.length > 0) {
-            const user = uRes.data[0];
+        // 2. 正式员工身份只通过云函数读取，客户端不直接访问 users 集合。
+        wx.cloud.callFunction({
+          name: 'manageOrder',
+          data: { action: 'getSessionUser' }
+        }).then(sessionRes => {
+          const result = sessionRes.result || {};
+          if (result.success && result.user) {
+            const user = result.user;
             this.globalData.currentUser = user;
             wx.setStorageSync('currentUser', user);
             if (this.authReadyCallback) this.authReadyCallback(user);
@@ -128,7 +129,7 @@ App({
             resolve(null);
           }
         }).catch(err => {
-          console.error('查询用户信息失败：', err);
+          console.error('查询登录员工失败：', err);
           wx.removeStorageSync('currentUser');
           this.globalData.currentUser = null;
           if (this.authReadyCallback) this.authReadyCallback(null);
@@ -144,10 +145,4 @@ App({
     });
   },
 
-  fetchWorkerList() {
-    const db = wx.cloud.database();
-    db.collection('users').where({ role: 'worker' }).get().then(res => {
-      this.globalData.workerList = res.data || [];
-    }).catch(e => console.error('拉取师傅列表失败：', e));
-  }
 });

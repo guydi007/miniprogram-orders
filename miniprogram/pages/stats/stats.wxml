@@ -114,10 +114,10 @@
     <view class="card">
       <view class="section-title">👷 师傅业绩贡献榜</view>
       <block wx:if="{{workerRankList.length > 0}}">
-        <view class="worker-item" wx:for="{{workerRankList}}" wx:key="name">
+        <view class="worker-item" wx:for="{{workerRankList}}" wx:key="key">
           <view class="rank-badge {{index === 0 ? 'gold' : (index === 1 ? 'silver' : (index === 2 ? 'bronze' : ''))}}">{{index + 1}}</view>
           <view class="worker-info">
-            <text class="w-name">{{item.name}}</text>
+            <text class="w-name">{{item.displayName || item.name}}</text>
             <text class="w-sub">完工: {{item.completed}}单 | 未成: {{item.uncompleted}}单 | 待成: {{item.pendingCount}}单 | 待收: ¥{{item.pending}}</text>
           </view>
           <view class="worker-revenue">
@@ -202,8 +202,8 @@
             <text class="col col-money">成单总额</text>
             <text class="col col-cancel">退单</text>
           </view>
-          <view class="table-row" wx:for="{{serviceRankList}}" wx:key="name">
-            <text class="col col-name">{{item.name}}</text>
+          <view class="table-row" wx:for="{{serviceRankList}}" wx:key="key">
+            <text class="col col-name">{{item.displayName || item.name}}</text>
             <text class="col col-num">{{item.total}}</text>
             <text class="col col-num text-green">{{item.completed}}</text>
             <text class="col col-money text-orange">¥{{item.revenue}}</text>

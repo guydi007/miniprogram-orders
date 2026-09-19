@@ -410,6 +410,12 @@ page {
   border-radius: 30rpx;
 }
 
+.quick-pill-active {
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
 .split-pay-grid {
   display: flex;
   gap: 14rpx;

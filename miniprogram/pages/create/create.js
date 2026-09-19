@@ -1,22 +1,21 @@
 const app = getApp();
 
+// 业务日期统一按北京时间（UTC+8）解释，避免日本等时区在午夜附近把“今天/明天”算错。
+const BUSINESS_TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
+function businessDateString(offsetDays = 0) {
+  const shifted = new Date(Date.now() + BUSINESS_TZ_OFFSET_MS + offsetDays * 86400000);
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 // 智能转换相对时间为具体日期（如：今天 上午 -> 2026-09-10 上午）
 function parseDateSmart(text) {
   if (!text) return '';
   let str = String(text).trim();
-
-  const now = new Date();
-  const getFormat = (offsetDays) => {
-    const d = new Date(now.getTime() + offsetDays * 86400000);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  };
-
-  const today = getFormat(0);
-  const tomorrow = getFormat(1);
-
+  const today = businessDateString(0);
+  const tomorrow = businessDateString(1);
   str = str.replace(/(今天|当天|今日)\s*/g, `${today} `);
   str = str.replace(/(明天|次日)\s*/g, `${tomorrow} `);
   return str.replace(/\s+/g, ' ').trim();
@@ -26,10 +25,10 @@ Page({
   data: {
     currentUser: null,
 
-    availableCities: ['天津', '北京'],
-    permittedCities: ['天津', '北京'], // 严格兼容 create.wxml
+    availableCities: [],
+    permittedCities: [], // 严格兼容 create.wxml
     cityIndex: 0,
-    selectedCity: '天津',
+    selectedCity: '',
 
     sources: [{ name: '抖音' }, { name: '美团' }, { name: '转介绍' }],
     sourceNames: ['抖音', '美团', '转介绍'],
@@ -57,8 +56,8 @@ Page({
   onLoad() {
     const user = wx.getStorageSync('currentUser') || (app.globalData && app.globalData.currentUser);
     
-    if (user && user.role === 'admin') {
-      wx.showToast({ title: '管理员无录单权限', icon: 'none' });
+    if (!user || !['service', 'leader'].includes(user.role)) {
+      wx.showToast({ title: '当前账号无录单权限', icon: 'none' });
       setTimeout(() => wx.navigateBack(), 1200);
       return;
     }
@@ -66,13 +65,25 @@ Page({
     this.setData({ currentUser: user }, () => {
       this.loadCities();
       this.loadSources();
-      if (user && user.role === 'leader') this.loadWorkers();
     });
   },
 
-  loadCities() {
-    let allCities = wx.getStorageSync('availableCities') || ['天津', '北京'];
+  async loadCities() {
     const user = this.data.currentUser;
+    let allCities = [];
+    try {
+      const res = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getCities' } });
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'CITIES_UNAVAILABLE');
+      allCities = (result.cities || []).map(item => typeof item === 'string' ? item : item.name).filter(Boolean);
+      if (allCities.length) {
+        wx.setStorageSync('availableCities', allCities);
+        if (app.globalData) app.globalData.availableCities = allCities;
+      }
+    } catch (error) {
+      console.warn('拉取城市失败，使用本地缓存：', error);
+      allCities = wx.getStorageSync('availableCities') || [];
+    }
 
     let userCities = [];
     if (user) {
@@ -82,41 +93,45 @@ Page({
     }
     userCities = userCities.filter(c => c && typeof c === 'string');
 
-    let finalCities = allCities;
+    let finalCities = [];
     if (user && user.role !== 'admin' && userCities.length > 0) {
       finalCities = allCities.filter(c => userCities.includes(c));
       if (finalCities.length === 0) finalCities = userCities;
-    }
-    if (!finalCities || finalCities.length === 0) {
-      finalCities = ['天津', '北京'];
     }
 
     this.setData({
       availableCities: finalCities,
       permittedCities: finalCities,
       cityIndex: 0,
-      selectedCity: finalCities[0]
+      selectedCity: finalCities[0] || ''
+    }, () => {
+      if (!finalCities.length) {
+        wx.showToast({ title: '当前账号未配置城市权限', icon: 'none' });
+        this.setData({ workers: [], workerNames: ['暂不指派（保持待派单）'], workerIndex: 0 });
+        return;
+      }
+      if (user && user.role === 'leader') this.loadWorkers();
     });
   },
 
   loadSources() {
-    const db = wx.cloud.database();
-    db.collection('order_sources').orderBy('sort', 'asc').get().then(res => {
-      let list = res.data || [];
-      if (list.length === 0) {
-        list = [{ name: '抖音' }, { name: '美团' }, { name: '转介绍' }];
-      }
-      const names = list.map(s => (typeof s === 'string' ? s : s.name));
+    wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getSources' } }).then(res => {
+      const result = res.result || {};
+      if (!result.success) throw new Error(result.msg || 'SOURCES_UNAVAILABLE');
+      let list = result.sources || [];
+      if (list.length === 0) list = [{ name: '抖音' }, { name: '美团' }, { name: '转介绍' }];
+      const names = list.map(s => typeof s === 'string' ? s : s.name).filter(Boolean);
+      if (names.length) wx.setStorageSync('availableSources', names);
       this.setData({
         sources: list,
         sourceNames: names,
         sourceOptions: names,
         sourceIndex: 0,
-        selectedSource: names[0]
+        selectedSource: names[0] || ''
       });
     }).catch(err => {
       console.warn('拉取渠道失败，使用兜底配置：', err);
-      const fallback = ['抖音', '美团', '转介绍', '其他'];
+      const fallback = wx.getStorageSync('availableSources') || ['抖音', '美团', '转介绍'];
       this.setData({
         sources: fallback.map(n => ({ name: n })),
         sourceNames: fallback,
@@ -127,27 +142,15 @@ Page({
     });
   },
 
-  loadWorkers() {
-    wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'getWorkers' } }).then(res => {
-      const result = res.result || {};
-      if (!result.success) throw new Error(result.msg || 'WORKERS_UNAVAILABLE');
-      const workers = result.workers || [];
-      const workerNames = ['暂不指派（保持待派单）', ...workers.map(w => w.name + (w.role === 'leader' ? ' [主管]' : ''))];
-      this.setData({
-        workers: workers,
-        workerNames: workerNames,
-        workerIndex: 0,
-        currentWorkerGroup: ''
-      });
-    }).catch(err => console.error('获取师傅列表失败：', err));
-  },
-
   onCityChange(e) {
     const idx = Number(e.detail.value) || 0;
     const list = this.data.availableCities || [];
     this.setData({
       cityIndex: idx,
       selectedCity: list[idx] || ''
+    }, () => {
+      const user = this.data.currentUser;
+      if (user && user.role === 'leader') this.loadWorkers();
     });
   },
 
@@ -213,13 +216,16 @@ Page({
 
     const { availableCities, cityIndex, customerPhone, address, appointmentTime, sourceNames, sourceIndex, workers, workerIndex, totalAmount, feedback, initialFeedback, currentUser } = this.data;
 
-    const city = availableCities[cityIndex] || this.data.selectedCity || '天津';
+    const city = availableCities[cityIndex] || this.data.selectedCity || '';
     const source = sourceNames[sourceIndex] || this.data.selectedSource || '默认渠道';
     const finalAppointmentTime = parseDateSmart(appointmentTime) || appointmentTime;
     const finalFeedback = feedback || initialFeedback || '';
 
-    if (!customerPhone || customerPhone.length < 7) {
-      return wx.showToast({ title: '请输入正确的客户电话', icon: 'none' });
+    if (!city) {
+      return wx.showToast({ title: '当前账号没有可录单城市', icon: 'none' });
+    }
+    if (!/^1\d{10}$/.test(customerPhone)) {
+      return wx.showToast({ title: '请输入正确的11位客户手机号', icon: 'none' });
     }
     if (!address) {
       return wx.showToast({ title: '请输入服务地址', icon: 'none' });
@@ -229,6 +235,7 @@ Page({
     }
 
     let status = '待派单';
+    let workerId = '';
     let workerName = '';
     let workerPhone = '';
     let workerGroupId = '';
@@ -236,13 +243,24 @@ Page({
     if (workerIndex > 0 && workers[workerIndex - 1]) {
       const selectedWorker = workers[workerIndex - 1];
       status = '已派单';
+      workerId = selectedWorker._id || '';
       workerName = selectedWorker.name;
       workerPhone = selectedWorker.phone || '';
       workerGroupId = selectedWorker.groupId || '';
     }
 
-    // 锁定当前登录客服姓名，彻底杜绝业绩被误挂到 0 号员工名下
-    const creatorName = (currentUser && currentUser.name) ? currentUser.name : '客服';
+    const createFingerprint = JSON.stringify({
+      city, customerPhone, address, appointmentTime: finalAppointmentTime, source,
+      workerId, workerPhone, totalAmount: totalAmount ? Number(totalAmount) : 0,
+      feedback: finalFeedback
+    });
+    if (!this._createOperation || this._createOperation.fingerprint !== createFingerprint) {
+      this._createOperation = {
+        id: 'create_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10),
+        fingerprint: createFingerprint
+      };
+    }
+    const createOperationId = this._createOperation.id;
 
     this.setData({ isSubmitting: true });
     wx.showLoading({ title: '正在提交订单...' });
@@ -254,29 +272,27 @@ Page({
       appointmentTime: finalAppointmentTime,
       source: source,
       status: status,
+      workerId: workerId,
       workerName: workerName,
       workerPhone: workerPhone,
       totalAmount: totalAmount ? Number(totalAmount) : 0,
       paidAmount: 0,
       pendingBalance: 0,
-      feedbacks: finalFeedback ? [{
-        id: 'fb_' + Date.now(),
-        time: new Date().toISOString(),
-        timeFormatted: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        operatorName: creatorName,
-        operatorRole: (currentUser && currentUser.role) || 'service',
-        content: `【录单回馈】${finalFeedback}`,
-        photos: []
-      }] : [],
+      // 审计字段由服务端生成，客户端只提交录单备注正文。
+      initialFeedback: finalFeedback,
     };
 
     try {
-      const res = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'createOrder', data: orderData } });
+      const res = await wx.cloud.callFunction({ name: 'manageOrder', data: { action: 'createOrder', data: { ...orderData, createOperationId } } });
       if (!res.result || !res.result.success) throw new Error((res.result && res.result.msg) || '云端拒绝录单');
       wx.hideLoading();
       this.setData({ isSubmitting: false });
+      const isDuplicate = res.result.duplicate === true;
       const notification = res.result.notification;
-      if (notification && notification.success) {
+      this._createOperation = null;
+      if (isDuplicate) {
+        wx.showToast({ title: '工单已存在，未重复创建', icon: 'none' });
+      } else if (notification && notification.success) {
         wx.showToast({ title: '录单成功，主管已通知', icon: 'none' });
       } else {
         const eventId = res.result.eventId || '未知';

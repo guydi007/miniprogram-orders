@@ -1,0 +1,9 @@
+{
+  "triggers": [
+    {
+      "name": "orphanUploadCleanupHourly",
+      "type": "timer",
+      "config": "0 15 * * * * *"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "cleanupOrderFiles",
+  "version": "1.0.0",
+  "description": "清理超过72小时且未被工单引用的上传图片",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}
