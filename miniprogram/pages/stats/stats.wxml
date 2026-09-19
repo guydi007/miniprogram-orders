@@ -6,9 +6,8 @@
         class="city-chip {{ selectedCityFilter === 'all' ? 'city-chip-active' : '' }}" 
         bindtap="onCityFilterChange" 
         data-city="all"
-        wx:if="{{ currentUser && currentUser.role === 'admin' }}"
       >
-        全部城市
+        全部
       </view>
       <view 
         class="city-chip {{ selectedCityFilter === item ? 'city-chip-active' : '' }}" 

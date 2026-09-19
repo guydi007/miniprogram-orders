@@ -1003,6 +1003,9 @@ Page({
     wx.showLoading({ title: '正在上传拍照凭据...' });
     const uploadedCloudIds = Array.isArray(this._paymentUploadedCloudIds) ? [...this._paymentUploadedCloudIds] : [];
 
+    // 阶段1：先上传并登记付款凭据。
+    // 这里失败时 finishOrder 还没有被调用，因此可以明确告诉用户“付款尚未提交”，
+    // 不能误报成“付款结果待确认”。
     try {
       for (let i = 0; i < localPhotos.length; i++) {
         const localPath = localPhotos[i];
@@ -1011,72 +1014,82 @@ Page({
           cloudPath: cloudPath,
           filePath: localPath
         });
-        if (res.fileID) {
-          await this.trackUploadedFile(res.fileID, orderId, operationId, 'payment');
-          uploadedCloudIds.push(res.fileID);
-        }
+        if (!res.fileID) throw new Error('UPLOAD_FILE_ID_MISSING');
+
+        await this.trackUploadedFile(res.fileID, orderId, operationId, 'payment');
+        uploadedCloudIds.push(res.fileID);
       }
+    } catch (err) {
+      console.error('付款凭据上传或登记失败：', err);
+      wx.hideLoading();
 
-      let updateData = {
-        settleType: settleMode === 'full' ? '全款' : '预付款',
-        cashAmount: cash,
-        wechatAmount: wechat,
-        alipayAmount: alipay,
-        finalAmount: paidSum,
-        depositAmount: settleMode === 'prepay' ? paidSum : 0,
-        totalAmount: settleMode === 'full' ? paidSum : (Number(inputTotalAmount) || paidSum),
-        remainingAmount: settleMode === 'full' ? 0 : remainTotal,
-        companionWorkers: modalCompanions,
-        finishPhotos: uploadedCloudIds,
-        newFinishPhotos: uploadedCloudIds,
-        finishNote: modalNote || order.finishNote || '',
-        isUrgent: false
-      };
+      // finishOrder 尚未发起。已经成功上传并登记的文件可以安全清理；
+      // 当前失败文件若是登记失败，trackUploadedFile 内部也会尝试立即删除。
+      await this.cleanupUploadedFiles(uploadedCloudIds);
+      this.clearPendingPaymentOperation();
 
-      let operationType;
-      if (settleMode === 'prepay' && isPrepayCorrection) {
-        operationType = 'amount_correction';
-      } else if (order && order.settleType) {
-        operationType = settleMode === 'prepay'
-          ? (paidSum > Number(order.depositAmount || order.finalAmount || 0) ? (remainTotal === 0 ? 'final_payment' : 'additional_payment') : 'amount_correction')
-          : 'amount_correction';
-      } else {
-        operationType = settleMode === 'full' ? 'full_payment' : 'deposit_payment';
-      }
+      wx.showModal({
+        title: '付款凭据上传失败',
+        content: '照片上传或登记失败，本次付款尚未提交。请检查网络后重新上传照片再提交。',
+        showCancel: false
+      });
+      return;
+    }
 
-      wx.showLoading({ title: '正在保存并留痕...' });
-      const res = await wx.cloud.callFunction({
+    const updateData = {
+      settleType: settleMode === 'full' ? '全款' : '预付款',
+      cashAmount: cash,
+      wechatAmount: wechat,
+      alipayAmount: alipay,
+      finalAmount: paidSum,
+      depositAmount: settleMode === 'prepay' ? paidSum : 0,
+      totalAmount: settleMode === 'full' ? paidSum : (Number(inputTotalAmount) || paidSum),
+      remainingAmount: settleMode === 'full' ? 0 : remainTotal,
+      companionWorkers: modalCompanions,
+      finishPhotos: uploadedCloudIds,
+      newFinishPhotos: uploadedCloudIds,
+      finishNote: modalNote || order.finishNote || '',
+      isUrgent: false
+    };
+
+    let operationType;
+    if (settleMode === 'prepay' && isPrepayCorrection) {
+      operationType = 'amount_correction';
+    } else if (order && order.settleType) {
+      operationType = settleMode === 'prepay'
+        ? (paidSum > Number(order.depositAmount || order.finalAmount || 0) ? (remainTotal === 0 ? 'final_payment' : 'additional_payment') : 'amount_correction')
+        : 'amount_correction';
+    } else {
+      operationType = settleMode === 'full' ? 'full_payment' : 'deposit_payment';
+    }
+
+    // 阶段2：只有从这里开始，才存在“请求可能已到达服务端，但客户端没收到结果”的情况。
+    let callResult;
+    wx.showLoading({ title: '正在保存并留痕...' });
+    try {
+      callResult = await wx.cloud.callFunction({
         name: 'manageOrder',
         data: {
           action: 'finishOrder',
           orderId: orderId,
           expectedVersion: Number(order && order.version || 0),
-          data: { ...updateData, operationId, operationType, amountThisTime: settleMode === 'prepay' ? Math.max(0, paidSum - Number(order && (order.depositAmount || order.finalAmount) || 0)) : paidSum, correctionReason: correctionReason || modalNote || '' }
+          data: {
+            ...updateData,
+            operationId,
+            operationType,
+            amountThisTime: settleMode === 'prepay'
+              ? Math.max(0, paidSum - Number(order && (order.depositAmount || order.finalAmount) || 0))
+              : paidSum,
+            correctionReason: correctionReason || modalNote || ''
+          }
         }
       });
-
-      wx.hideLoading();
-      const result = res.result || {};
-      if (result.success) {
-        // duplicate 也可能是“第一次已提交但响应丢失”。只做引用确认，不立即删除照片；未引用文件由72小时任务清理。
-        if (uploadedCloudIds.length) await this.confirmUploadedFiles(uploadedCloudIds);
-        this.clearPendingPaymentOperation();
-        this.setData({ showFinishModal: false, localPhotos: [] });
-        wx.showToast({
-          title: result.notification && !result.notification.success ? '订单已保存，群通知待处理' : (settleMode === 'full' ? '全款结单已留痕！' : '预付定金已留痕！'),
-          icon: 'success'
-        });
-        await this.fetchOrderDetail(orderId);
-      } else {
-        // 云函数明确返回失败，说明本次上传文件未被此次业务提交引用，可以清理。
-        await this.cleanupUploadedFiles(uploadedCloudIds);
-        this.clearPendingPaymentOperation();
-        await this.handleOrderMutationFailure(result, '保存失败，请重试');
-      }
     } catch (err) {
-      console.error(err);
+      console.error('付款提交结果未知：', err);
       wx.hideLoading();
-      // 网络/调用异常无法判断服务端是否已经提交。保留 operationId 和已上传文件，后续只能核对或使用同一流水号重试。
+
+      // 此时 finishOrder 已经发起，无法仅凭客户端异常判断服务端是否已写入。
+      // 保留 operationId 和已上传文件，后续只能核对或复用同一流水号重试。
       this.savePendingPaymentOperation(operationId, uploadedCloudIds);
       this.setData({ pendingPaymentCloudIds: uploadedCloudIds });
       wx.showModal({
@@ -1084,7 +1097,39 @@ Page({
         content: '网络异常，暂时无法确认本次付款是否已入账。请勿重新创建一笔付款；再次打开付款窗口时系统会先核对并复用同一流水号。',
         showCancel: false
       });
+      return;
     }
+
+    wx.hideLoading();
+    const result = callResult.result || {};
+
+    if (result.success) {
+      // duplicate 也可能是“第一次已提交但响应丢失”。只做引用确认，不立即删除照片；
+      // 未引用文件由72小时任务清理。
+      if (uploadedCloudIds.length) await this.confirmUploadedFiles(uploadedCloudIds);
+      this.clearPendingPaymentOperation();
+      this.setData({ showFinishModal: false, localPhotos: [] });
+      wx.showToast({
+        title: result.notification && !result.notification.success
+          ? '订单已保存，群通知待处理'
+          : (settleMode === 'full' ? '全款结单已留痕！' : '预付定金已留痕！'),
+        icon: 'success'
+      });
+
+      // 付款已经明确成功。后续刷新详情即使失败，也绝不能再被当成“付款结果未知”。
+      try {
+        await this.fetchOrderDetail(orderId);
+      } catch (refreshError) {
+        console.warn('付款已成功，但刷新订单详情失败：', refreshError);
+      }
+      return;
+    }
+
+    // 云函数明确返回失败，说明这不是“结果未知”。
+    // 本次上传文件未被此次业务提交引用，可以清理。
+    await this.cleanupUploadedFiles(uploadedCloudIds);
+    this.clearPendingPaymentOperation();
+    await this.handleOrderMutationFailure(result, '保存失败，请重试');
   },
 
   openFeedbackModal() {

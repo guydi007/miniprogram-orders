@@ -96,7 +96,9 @@ Page({
     let allCities = wx.getStorageSync('availableCities') || ['天津', '北京'];
     
     let visible = allCities;
-    let defaultCity = 'all';
+    // 统计页统一默认“全部”。对主管而言，“全部”只代表其已授权城市集合，
+    // 实际数据范围仍由前端可见城市过滤 + manageOrder 服务端权限共同限制。
+    const defaultCity = 'all';
 
     if (user && user.role !== 'admin') {
       const myCities = Array.isArray(user.cities)
@@ -105,7 +107,6 @@ Page({
       visible = allCities.filter(c => myCities.includes(c));
       // 员工城市权限是最终权限来源；本地城市缓存落后时使用员工已授权城市。
       if (visible.length === 0 && myCities.length > 0) visible = myCities;
-      defaultCity = visible[0] || 'all';
       if (!visible.length) wx.showToast({ title: '当前账号未配置城市权限', icon: 'none' });
     }
 
