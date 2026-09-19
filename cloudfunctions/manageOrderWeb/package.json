@@ -1,0 +1,10 @@
+{
+  "name": "manageOrderWeb",
+  "version": "1.0.0",
+  "description": "工单管理 Web 后台服务（独立于小程序 manageOrder）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3",
+    "@cloudbase/node-sdk": "3.18.3"
+  }
+}

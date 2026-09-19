@@ -1,0 +1,16 @@
+{
+  "miniprogramState": "developer",
+  "urgent": {
+    "templateId": "h2xwE4YRkuI4r-DmVqJHVpN_l_YSTdKMutIg0Lmwrug",
+    "fields": { "thing9": "address", "thing4": "reason" }
+  },
+  "newOrder": {
+    "templateId": "EpuvkayKRzofgw4aHDoATj7rWfxP4GS7CPJtHYANfOI",
+    "fields": {
+      "time7": "appointmentTime",
+      "phone_number18": "customerPhone",
+      "thing22": "address",
+      "time23": "createTime"
+    }
+  }
+}
