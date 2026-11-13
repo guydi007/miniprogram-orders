@@ -39,7 +39,6 @@ Page({
     workers: [],
     workerNames: ['暂不指派（保持待派单）'],
     workerIndex: 0,
-    currentWorkerGroup: '',
 
     customerPhone: '',
     address: '',
@@ -165,14 +164,7 @@ Page({
 
   onWorkerChange(e) {
     const idx = Number(e.detail.value) || 0;
-    let groupId = '';
-    if (idx > 0 && this.data.workers[idx - 1]) {
-      groupId = this.data.workers[idx - 1].groupId || '';
-    }
-    this.setData({
-      workerIndex: idx,
-      currentWorkerGroup: groupId
-    });
+    this.setData({ workerIndex: idx });
   },
 
   onPhoneInput(e) {
@@ -238,7 +230,6 @@ Page({
     let workerId = '';
     let workerName = '';
     let workerPhone = '';
-    let workerGroupId = '';
 
     if (workerIndex > 0 && workers[workerIndex - 1]) {
       const selectedWorker = workers[workerIndex - 1];
@@ -246,7 +237,6 @@ Page({
       workerId = selectedWorker._id || '';
       workerName = selectedWorker.name;
       workerPhone = selectedWorker.phone || '';
-      workerGroupId = selectedWorker.groupId || '';
     }
 
     const createFingerprint = JSON.stringify({

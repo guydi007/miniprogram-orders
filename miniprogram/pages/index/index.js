@@ -290,7 +290,6 @@ Page({
       workerId: worker._id || '',
       workerName: worker.name,
       workerPhone: worker.phone || '',
-      workerGroupId: '',
       status: '已派单'
     };
 

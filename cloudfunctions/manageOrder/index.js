@@ -4,7 +4,7 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
 const _ = db.command;
 const { parseWebhook, normalizeGroup, webhookFingerprint, notifyConfiguredGroups } = require('./groupNotifications');
-const { notifyAll, getNotificationConfig } = require('./notifications');
+const { getNotificationConfig } = require('./notifications');
 const { resolveOrderLocation } = require('./orderLocation');
 
 const DEFAULT_CLIENT_POLICY = { latestBuild: 20400, minWriteBuild: 0, minReadBuild: 0, apiSchema: 2, forceAfter: '', message: '请升级到最新版本' };
@@ -30,7 +30,8 @@ function paymentNotificationSnapshot(order, after, details) {
     cashAmount: Number(after.cashAmount || 0), wechatAmount: Number(after.wechatAmount || 0), alipayAmount: Number(after.alipayAmount || 0),
     eventType: details.eventType, operationType: details.operationType, amountThisTime: details.amountThisTime,
     paidBefore: details.paidBefore, paymentChannelCorrected: details.paymentChannelCorrected,
-    correctionReason: details.correctionReason || ''
+    correctionReason: details.correctionReason || '',
+    settlementNote: String(details.settlementNote || '')
   };
 }
 
@@ -863,6 +864,7 @@ exports.main = async (event = {}) => {
       const groupType = String(input.groupType || '').trim();
       const webhookUrl = String(input.webhookUrl || '').trim();
       if (!city || !groupName || !/^1\d{10}$/.test(phone) || !['order_entry', 'deal', 'unconverted'].includes(groupType)) return { success: false, msg: '群配置字段不完整或格式错误' };
+      if (!(await getReferenceCities()).some(item => item.name === city)) return { success: false, msg: '所属城市不在已启用的城市列表中' };
       try { parseWebhook(webhookUrl); } catch (error) { return { success: false, msg: 'Webhook必须是企业微信官方地址' }; }
       const fingerprint = webhookFingerprint(webhookUrl);
       // 一个企业微信群机器人只对应一个真实群。若复用到其他城市/类型，文字标签
@@ -1444,7 +1446,7 @@ exports.main = async (event = {}) => {
       }, ...(Array.isArray(order.paymentLogs) ? order.paymentLogs : [])];
       const eventType = isCorrection ? 'AMOUNT_CORRECTION' : (operationType === 'full_payment' ? 'FULL_PAYMENT' : (operationType === 'deposit_payment' ? 'DEPOSIT_PAYMENT' : (operationType === 'final_payment' ? 'FINAL_PAYMENT' : 'ADDITIONAL_PAYMENT')));
       const paymentData = { paymentId, operationId, orderId, operationType, city: order.city || '', workerId: order.workerId || '', workerName: order.workerName || '', workerPhone: order.workerPhone || '', source: order.source || '', creatorId: order.creatorId || '', creatorName: order.creatorName || '', paidBefore: beforePaid, amountThisTime, paidAfter: afterPaid, totalAmount: Number(after.totalAmount || afterPaid), remainingBefore: Number(order.remainingAmount || 0), remainingAfter: Number(after.remainingAmount || 0), cashBefore: Number(order.cashAmount || 0), cashAfter: Number(after.cashAmount || 0), wechatBefore: Number(order.wechatAmount || 0), wechatAfter: Number(after.wechatAmount || 0), alipayBefore: Number(order.alipayAmount || 0), alipayAfter: Number(after.alipayAmount || 0), correctionReason: String(data.correctionReason || ''), note: String(data.note || ''), operatorId: user._id, operatorName: user.name || '', operatorRole: user.role, createdAt: now };
-      const notificationSnapshot = paymentNotificationSnapshot(order, after, { eventType, operationType, amountThisTime, paidBefore: beforePaid, paymentChannelCorrected: channelsChanged && beforePaid === afterPaid, correctionReason: String(data.correctionReason || data.note || '') });
+      const notificationSnapshot = paymentNotificationSnapshot(order, after, { eventType, operationType, amountThisTime, paidBefore: beforePaid, paymentChannelCorrected: channelsChanged && beforePaid === afterPaid, correctionReason: String(data.correctionReason || data.note || ''), settlementNote: String(data.note || '') });
       const eventData = { eventId: 'evt_' + paymentId, eventKey: `order:${orderId}:payment:${paymentId}`, orderId, eventType, groupType: 'deal', city: order.city, paymentId, operationId, actorId: user._id, actorRole: user.role, isTestEvent: user.isTest === true, notificationSnapshot, status: 'PENDING', nextRetryAt: new Date(Date.now() + 60000).toISOString(), createdAt: now, expiresAt: new Date(Date.now() + 7 * 86400000).toISOString() };
       try {
         const clientExpectedVersion = readExpectedVersion(event, data);
