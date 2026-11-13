@@ -92,10 +92,11 @@ async function recipients(db, type, order, operator) {
 }
 
 function contentFor(type, order, operator) {
-  const clean = (value, max = 100) => String(value || '无').replace(/[\x00-\x1F\r\n]/g, ' ').slice(0, max);
+  const clean = (value, max = 100) => Array.from(String(value || '无').replace(/[\x00-\x1F\x7F]/g, ' ')).slice(0, max).join('');
   const phone = clean(order.customerPhone, 11);
   const maskedPhone = /^1\d{10}$/.test(phone) ? `${phone.slice(0, 3)}****${phone.slice(-4)}` : '未填写';
-  const latestFeedback = Array.isArray(order.feedbacks) && order.feedbacks.length
+  const settlementNote = String(order.settlementNote || '').trim();
+  const latestFeedback = settlementNote ? settlementNote : Array.isArray(order.feedbacks) && order.feedbacks.length
     ? order.feedbacks[0].content || order.feedbacks[0].text || ''
     : (order.finishNote || order.note || '');
   const titleMap = {

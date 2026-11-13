@@ -64,7 +64,6 @@
         <view class="picker-inner">
           <text class="picker-text {{ workerIndex === 0 ? 'text-gray' : 'text-bold' }}">{{ workerNames[workerIndex] || '暂不指派' }}</text>
           <view class="picker-right">
-            <text class="group-badge" wx:if="{{ currentWorkerGroup }}">群：{{ currentWorkerGroup }}</text>
             <text class="arrow-down">▼</text>
           </view>
         </view>
