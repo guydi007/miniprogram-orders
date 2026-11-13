@@ -58,39 +58,6 @@ function postWebhook(webhook, message) {
   });
 }
 
-function citiesOf(user) {
-  if (Array.isArray(user.cities)) return user.cities;
-  if (typeof user.cities === 'string') return [user.cities];
-  return user.cities && typeof user.cities === 'object' ? Object.values(user.cities) : [];
-}
-
-async function recipients(db, type, order, operator) {
-  let list;
-  if (type === 'urgent') {
-    // 新订单使用不可变 workerId 精确定位；历史数据缺少 workerId 时才按手机号兼容。
-    if (order.workerId) {
-      const result = await db.collection('users').doc(String(order.workerId)).get().catch(() => ({ data: null }));
-      list = result.data && ['worker', 'leader'].includes(result.data.role) ? [result.data] : [];
-    } else {
-      if (!/^1\d{10}$/.test(String(order.workerPhone || ''))) return [];
-      const result = await db.collection('users').where({ phone: order.workerPhone }).limit(2).get();
-      list = (result.data || []).filter(user => ['worker', 'leader'].includes(user.role));
-      // 历史手机号匹配必须唯一，绝不根据姓名猜收件人。
-      if (list.length !== 1) return [];
-    }
-  } else {
-    list = [];
-    for (let skip = 0; ; skip += 100) {
-      const result = await db.collection('users').where({ role: 'leader' }).skip(skip).limit(100).get();
-      list.push(...(result.data || []));
-      if (!result.data || result.data.length < 100) break;
-    }
-    list = list.filter(user => order.city && citiesOf(user).includes(order.city));
-  }
-  // 测试操作不通知正式人员；测试人员需单独配置测试群地址。
-  return operator.isTest ? list.filter(user => user.isTest === true) : list.filter(user => user.isTest !== true);
-}
-
 function contentFor(type, order, operator) {
   const clean = (value, max = 100) => Array.from(String(value || '无').replace(/[\x00-\x1F\x7F]/g, ' ')).slice(0, max).join('');
   const phone = clean(order.customerPhone, 11);
@@ -283,44 +250,4 @@ async function notifyConfiguredGroups(db, type, order, operator, send = postWebh
   };
 }
 
-async function notifyGroup(db, type, order, operator, send = postWebhook, suppliedUsers) {
-  return { success: true, status: 'SUPPRESSED', sent: 0, msg: '旧员工Webhook通知路径已停用' };
-  /* legacy employee-webhook implementation retained for data compatibility */
-  let summary;
-  try {
-    const users = suppliedUsers || await recipients(db, type, order, operator);
-    const groups = new Map();
-    const missing = users.filter(user => !user.webhookUrl).length;
-    users.filter(user => user.webhookUrl).forEach(user => {
-      if (!groups.has(user.webhookUrl)) groups.set(user.webhookUrl, []);
-      groups.get(user.webhookUrl).push(user);
-    });
-    const results = await Promise.all(Array.from(groups, async ([webhook, members]) => {
-      const message = { msgtype: 'text', text: { content: contentFor(type, order, operator) } };
-      const mobiles = [...new Set(members.map(user => user.phone).filter(phone => /^1\d{10}$/.test(phone || '')))];
-      if (mobiles.length) message.text.mentioned_mobile_list = mobiles;
-      try {
-        parseWebhook(webhook);
-        await send(webhook, message);
-        return { success: true, recipientIds: members.map(user => user._id) };
-      } catch (error) {
-        // 不保存 Webhook 或原始响应，防止泄露机器人密钥。
-        return { success: false, recipientIds: members.map(user => user._id), error: error.message.startsWith('机器人') ? error.message : '机器人发送失败' };
-      }
-    }));
-    const sent = results.filter(result => result.success).length;
-    summary = { success: results.length > 0 && sent === results.length && missing === 0,
-      sent, failed: results.length - sent, missing, results,
-      msg: users.length === 0 ? '未找到匹配的接收人员' : (groups.size === 0 ? '接收人员未配置机器人地址' : '群通知已处理') };
-  } catch (error) {
-    summary = { success: false, sent: 0, failed: 0, missing: 0, msg: '通知接收人员查询失败' };
-  }
-  try {
-    await db.collection('orders').doc(order._id).update({ data: {
-      groupNotificationLogs: db.command.push({ type, time: new Date().toISOString(), operatorId: operator._id, ...summary })
-    } });
-  } catch (error) { summary.logSaved = false; }
-  return summary;
-}
-
-module.exports = { notifyGroup, notifyConfiguredGroups, parseWebhook, postWebhook, recipients, webhookFingerprint, normalizeGroup };
+module.exports = { notifyConfiguredGroups, parseWebhook, postWebhook, webhookFingerprint, normalizeGroup };

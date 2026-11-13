@@ -976,6 +976,7 @@ exports.main = async (event = {}, context = {}) => {
       const groupType = String(input.groupType || '').trim();
       const webhookUrl = String(input.webhookUrl || '').trim();
       if (!city || !groupName || !/^1\d{10}$/.test(phone) || !['order_entry', 'deal', 'unconverted'].includes(groupType)) return { success: false, msg: '群配置字段不完整或格式错误' };
+      if (!(await getReferenceCities()).some(item => item.name === city)) return { success: false, msg: '所属城市不在已启用的城市列表中' };
       try { parseWebhook(webhookUrl); } catch (error) { return { success: false, msg: 'Webhook必须是企业微信官方地址' }; }
       const fingerprint = webhookFingerprint(webhookUrl);
       // 一个企业微信群机器人只对应一个真实群。若复用到其他城市/类型，文字标签
